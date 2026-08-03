@@ -1,6 +1,6 @@
-"""Auth router: login, refresh, logout."""
+"""Auth router: login, refresh, logout, change-password."""
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -38,6 +38,11 @@ class RegisterRequest(BaseModel):
     role: UserRole = UserRole.viewer
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(
     form: OAuth2PasswordRequestForm = Depends(),
@@ -56,7 +61,7 @@ def login(
     access = create_access_token(user.id)
     raw_refresh = create_refresh_token_string()
     token_hash = hash_refresh_token(raw_refresh)
-    expires_at = datetime.utcnow() + timedelta(days=_settings.jwt_refresh_token_expire_days)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=_settings.jwt_refresh_token_expire_days)
     RefreshTokenRepository(db).create(user.id, token_hash, expires_at)
 
     return TokenResponse(access_token=access, refresh_token=raw_refresh)
@@ -68,7 +73,7 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
     rt_repo = RefreshTokenRepository(db)
     rt = rt_repo.get_by_hash(token_hash)
 
-    if not rt or rt.revoked or rt.expires_at < datetime.utcnow():
+    if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
@@ -78,7 +83,7 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
     new_access = create_access_token(rt.user_id)
     new_raw_refresh = create_refresh_token_string()
     new_hash = hash_refresh_token(new_raw_refresh)
-    new_expires = datetime.utcnow() + timedelta(days=_settings.jwt_refresh_token_expire_days)
+    new_expires = datetime.now(timezone.utc) + timedelta(days=_settings.jwt_refresh_token_expire_days)
     rt_repo.create(rt.user_id, new_hash, new_expires)
 
     return TokenResponse(access_token=new_access, refresh_token=new_raw_refresh)
@@ -91,12 +96,21 @@ def logout(body: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+def register(
+    body: RegisterRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Create a new user. Requires admin role."""
+    if current_user.role != UserRole.admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     repo = UserRepository(db)
     if repo.get_by_username(body.username):
         raise HTTPException(status_code=400, detail="Username already taken")
     if repo.get_by_email(body.email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=422, detail="Password minimal 8 karakter")
     user = repo.create(
         username=body.username,
         email=body.email,
@@ -114,3 +128,17 @@ def me(current_user=Depends(get_current_user)):
         "email": current_user.email,
         "role": current_user.role,
     }
+
+
+@router.post("/change-password", status_code=200)
+def change_password(
+    body: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Password lama tidak sesuai.")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password baru minimal 8 karakter.")
+    UserRepository(db).update_password(current_user.id, hash_password(body.new_password))
+    return {"detail": "Password berhasil diubah."}
