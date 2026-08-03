@@ -2,9 +2,15 @@
 from __future__ import annotations
 import hashlib
 import hmac
+import logging
 import secrets
-from datetime import datetime, timedelta
+import warnings
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+# Suppress passlib/bcrypt version detection warning (passlib 1.7.x vs bcrypt 4.x)
+logging.getLogger("passlib").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*error reading bcrypt version.*")
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -36,12 +42,12 @@ _REFRESH_TOKEN_TYPE = "refresh"
 
 
 def _create_token(subject: str, token_type: str, expires_delta: timedelta) -> str:
-    expire = datetime.utcnow() + expires_delta
+    expire = datetime.now(timezone.utc) + expires_delta
     payload = {
         "sub": subject,
         "type": token_type,
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, _settings.jwt_secret_key, algorithm=_settings.jwt_algorithm)
 
@@ -112,7 +118,7 @@ _STREAM_TOKEN_TYPE = "stream"
 
 
 def create_stream_token(camera_id: int) -> str:
-    expire = datetime.utcnow() + timedelta(seconds=_settings.stream_token_expire_seconds)
+    expire = datetime.now(timezone.utc) + timedelta(seconds=_settings.stream_token_expire_seconds)
     payload = {
         "sub": str(camera_id),
         "type": _STREAM_TOKEN_TYPE,

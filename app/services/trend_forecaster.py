@@ -1,6 +1,6 @@
 """Trend forecaster using Holt-Winters exponential smoothing."""
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -31,7 +31,7 @@ class TrendForecaster:
         days_ahead: int = 14,
         history_days: int = 90,
     ) -> Dict:
-        end = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start = end - timedelta(days=history_days)
 
         rows = self._repo.get_range(camera_id=camera_id, start=start, end=end)

@@ -1,6 +1,6 @@
 """APScheduler-based background jobs."""
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,7 +17,7 @@ async def aggregate_hourly() -> None:
     Run at start of each hour (+ 2 min buffer).
     Aggregates the previous hour's CrossingEvents into HourlyAggregate.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     prev_hour_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     prev_hour_end = prev_hour_start + timedelta(hours=1)
 

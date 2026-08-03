@@ -1,6 +1,6 @@
 """Peak hour analyzer: heatmap of average visitors by hour x weekday."""
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 
 class PeakHourAnalyzer:
     """
-    Builds a 7×24 heatmap matrix from HourlyAggregate data.
+    Builds a 7Ã-24 heatmap matrix from HourlyAggregate data.
     Cell value = average entries for that (weekday, hour) slot across all weeks.
     """
 
@@ -37,7 +37,7 @@ class PeakHourAnalyzer:
             "peak": {"weekday": str, "hour": int, "avg": float},
           }
         """
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(weeks=weeks_back)
 
         rows = self._repo.get_range(camera_id=camera_id, start=start, end=end)
@@ -51,7 +51,7 @@ class PeakHourAnalyzer:
             sums[key] = sums.get(key, 0.0) + row.entries
             counts[key] = counts.get(key, 0) + 1
 
-        # build 7×24 matrix
+        # build 7Ã-24 matrix
         matrix = []
         peak_val = 0.0
         peak_wd = 0

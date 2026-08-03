@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # YOLO
     yolo_model_path: str = "yolov8n.pt"
 
+    # yt-dlp YouTube authentication
+    # Option 1: path to a Netscape-format cookies.txt file
+    yt_dlp_cookies_file: str = ""
+    # Option 2: extract cookies from a browser ("chrome", "firefox", "edge", etc.)
+    yt_dlp_cookies_from_browser: str = ""
+
     # Logging
     log_level: str = "INFO"
 

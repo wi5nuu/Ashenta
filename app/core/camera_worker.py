@@ -1,6 +1,7 @@
 """CameraWorker — low-latency RTSP/HTTP/video capture, per-frame counter publish, thread-safe line reload."""
 from __future__ import annotations
 import json
+import os
 import threading
 import time
 from typing import Optional, List
@@ -88,15 +89,40 @@ _YOUTUBE_DOMAINS = (
     "youtube.com/shorts/",
 )
 
+# Phrases in yt-dlp error messages that indicate auth/bot-detection failure.
+# These are permanent errors — retrying without fixing cookies will never help.
+_BOT_DETECTION_PHRASES = (
+    "sign in to confirm",
+    "bot detection",
+    "--cookies-from-browser",
+    "--cookies for the authentication",
+)
+
+
+class YouTubeBotDetectionError(RuntimeError):
+    """Raised when YouTube blocks yt-dlp with a bot-detection / sign-in error.
+
+    This is a permanent failure for the current session — the worker should
+    stop retrying until the operator configures cookies and manually restarts
+    the camera.
+    """
+
 
 def _resolve_yt_dlp(url: str) -> str:
     """
     Resolve a YouTube (or other yt-dlp-supported) URL to a direct stream URL.
     Picks the best format ≤1080p with both video and audio.
     Raises RuntimeError if yt-dlp is unavailable or extraction fails.
+
+    Authentication (required to bypass YouTube bot-detection):
+      - Set YT_DLP_COOKIES_FILE to a Netscape-format cookies.txt path, OR
+      - Set YT_DLP_COOKIES_FROM_BROWSER to a browser name (chrome/firefox/edge/…)
     """
     if not _YT_DLP_AVAILABLE:
         raise RuntimeError("yt-dlp is not installed; cannot open YouTube URL.")
+
+    from app.config.settings import get_settings
+    settings = get_settings()
 
     ydl_opts = {
         "quiet": True,
@@ -104,20 +130,53 @@ def _resolve_yt_dlp(url: str) -> str:
         "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
         "noplaylist": True,
     }
-    with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        # For playlists/channels yt-dlp wraps entries; take first entry
-        if "entries" in info:
-            info = info["entries"][0]
-        # Prefer a direct url field; fall back to requested_formats[0]
-        direct_url = info.get("url")
-        if not direct_url:
-            fmts = info.get("requested_formats") or info.get("formats") or []
-            if fmts:
-                direct_url = fmts[0].get("url")
-        if not direct_url:
-            raise RuntimeError(f"yt-dlp could not extract a stream URL for: {url}")
-        return direct_url
+
+    cookies_file = (settings.yt_dlp_cookies_file or "").strip()
+    cookies_browser = (settings.yt_dlp_cookies_from_browser or "").strip()
+
+    if cookies_file:
+        if not os.path.isfile(cookies_file):
+            logger.warning("YT_DLP_COOKIES_FILE does not exist, ignoring",
+                           path=cookies_file)
+        else:
+            ydl_opts["cookiefile"] = cookies_file
+            logger.debug("yt-dlp using cookies file", path=cookies_file)
+    elif cookies_browser:
+        # yt-dlp accepts a tuple (browser, profile, keyring, container) or just a string
+        ydl_opts["cookiesfrombrowser"] = (cookies_browser,)
+        logger.debug("yt-dlp extracting cookies from browser", browser=cookies_browser)
+    else:
+        logger.warning(
+            "No YouTube cookies configured — requests may be blocked by bot-detection. "
+            "Set YT_DLP_COOKIES_FILE or YT_DLP_COOKIES_FROM_BROWSER in your .env."
+        )
+
+    try:
+        with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # For playlists/channels yt-dlp wraps entries; take first entry
+            if "entries" in info:
+                info = info["entries"][0]
+            # Prefer a direct url field; fall back to requested_formats[0]
+            direct_url = info.get("url")
+            if not direct_url:
+                fmts = info.get("requested_formats") or info.get("formats") or []
+                if fmts:
+                    direct_url = fmts[0].get("url")
+            if not direct_url:
+                raise RuntimeError(f"yt-dlp could not extract a stream URL for: {url}")
+            return direct_url
+    except YouTubeBotDetectionError:
+        raise
+    except Exception as exc:
+        msg = str(exc).lower()
+        if any(phrase in msg for phrase in _BOT_DETECTION_PHRASES):
+            raise YouTubeBotDetectionError(
+                f"YouTube bot-detection triggered for {url}. "
+                "Configure YT_DLP_COOKIES_FILE or YT_DLP_COOKIES_FROM_BROWSER in your "
+                ".env and restart the camera."
+            ) from exc
+        raise
 
 
 def _is_yt_dlp_url(url: str) -> bool:
@@ -267,12 +326,27 @@ class CameraWorker:
                     consecutive_failures = 0
                     detections = self._detector.detect(frame)
 
+                    # DEBUG: log detections every 30 frames
+                    if not hasattr(self, '_dbg_frame_count'):
+                        self._dbg_frame_count = 0
+                    self._dbg_frame_count += 1
+                    if self._dbg_frame_count % 30 == 0:
+                        logger.info("DEBUG detections",
+                                    camera_id=self._camera.id,
+                                    num_detections=len(detections),
+                                    has_counter=self._counter is not None,
+                                    num_lines=len(self._lines))
+
                     with self._counter_lock:
                         crossing_events = []
                         if self._counter is not None:
                             crossing_events = self._counter.update(detections)
 
                         for ev in crossing_events:
+                            logger.info("CROSSING EVENT",
+                                        camera_id=self._camera.id,
+                                        direction=ev.direction,
+                                        track_id=ev.track_id)
                             self._on_crossing(ev.camera_id, ev.direction, ev.track_id)
 
                         count_in  = self._counter.count_in  if self._counter else 0
@@ -287,6 +361,17 @@ class CameraWorker:
                         count_in, count_out, self._camera.name,
                     )
                     self._broker.put_frame(self._camera.id, annotated)
+
+            except YouTubeBotDetectionError as exc:
+                # Permanent auth failure — stop retrying immediately.
+                # The operator must configure cookies and manually restart.
+                logger.error(
+                    "YouTube bot-detection: stopping worker until cookies are "
+                    "configured and camera is manually restarted",
+                    camera_id=self._camera.id, error=str(exc),
+                )
+                self._set_status(CameraStatus.error)
+                self._stop_event.set()
 
             except Exception as exc:
                 logger.error("CameraWorker error",

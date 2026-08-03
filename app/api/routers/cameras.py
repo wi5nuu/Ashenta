@@ -1,7 +1,9 @@
-"""Cameras router — full CRUD, source_type support, stream token, live counter."""
+"""Cameras router - full CRUD, source_type support, stream token, live counter."""
 from __future__ import annotations
 from typing import List, Optional
+import asyncio
 import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from pydantic import BaseModel
@@ -12,6 +14,13 @@ from app.data.repositories import CameraRepository
 from app.security import encrypt_credential, create_stream_token
 from app.security.dependencies import get_current_user, require_admin
 from app.core.camera_manager import get_camera_manager
+
+
+def _write_file(path: str, data: bytes) -> None:
+    """Synchronous file write - run via asyncio.to_thread to avoid blocking the event loop."""
+    with open(path, "wb") as fh:
+        fh.write(data)
+
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 
@@ -202,15 +211,26 @@ def set_line_config(
 
 
 @router.post("/{camera_id}/start", status_code=200)
-def start_camera(camera_id: int, _=Depends(require_admin)):
+def start_camera(camera_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    cam = CameraRepository(db).get_by_id(camera_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    # Mark active in DB first so the manager's is_active check passes
+    if not cam.is_active:
+        CameraRepository(db).update_fields(camera_id, is_active=True)
     if not get_camera_manager().start_camera(camera_id):
-        raise HTTPException(status_code=404, detail="Camera not found or inactive")
+        raise HTTPException(status_code=500, detail="Failed to start camera worker")
     return {"detail": "started"}
 
 
 @router.post("/{camera_id}/stop", status_code=200)
-def stop_camera(camera_id: int, _=Depends(require_admin)):
+def stop_camera(camera_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    cam = CameraRepository(db).get_by_id(camera_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
     get_camera_manager().stop_camera(camera_id)
+    # Mark inactive in DB so it doesn't auto-start on next server restart
+    CameraRepository(db).update_fields(camera_id, is_active=False)
     return {"detail": "stopped"}
 
 
@@ -232,10 +252,10 @@ def get_live_counter(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
+    from datetime import datetime, timezone
     counter = get_camera_manager().get_live_counter(camera_id)
     if counter is None:
         from app.data.repositories import CrossingEventRepository
-        from datetime import datetime, timezone
         day = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -251,7 +271,6 @@ async def upload_video(
     _=Depends(require_admin),
 ):
     """Upload a video file and set it as the camera source."""
-    import os, shutil
     cam = CameraRepository(db).get_by_id(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -261,10 +280,10 @@ async def upload_video(
     ext = os.path.splitext(file.filename or "video.mp4")[1] or ".mp4"
     dest = os.path.join(upload_dir, f"cam_{camera_id}{ext}")
 
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # Read file bytes async, then write to disk in a thread to avoid blocking the event loop
+    file_data = await file.read()
+    await asyncio.to_thread(_write_file, dest, file_data)
 
     url_enc = encrypt_credential(os.path.abspath(dest))
     CameraRepository(db).update_fields(camera_id, url_encrypted=url_enc, source_type="video")
     return {"detail": "uploaded", "path": dest}
-

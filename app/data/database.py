@@ -6,12 +6,15 @@ from app.data.models import Base
 
 _settings = get_settings()
 
-engine = create_engine(
-    _settings.database_url,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+# SQLite does not support connection-pool tuning args (pool_size, max_overflow).
+# Pass them only for server-based databases.
+_is_sqlite = _settings.database_url.startswith("sqlite")
+_engine_kwargs: dict = {"pool_pre_ping": True}
+if not _is_sqlite:
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
+
+engine = create_engine(_settings.database_url, **_engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

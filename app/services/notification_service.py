@@ -1,7 +1,7 @@
 """Telegram notification service + alert rule evaluator."""
 from __future__ import annotations
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -78,7 +78,7 @@ class NotificationService:
                         f"Kamera: {event.camera_name}\n"
                         f"Net pengunjung saat ini: {net}\n"
                         f"Kondisi: {rule.condition.value} {rule.threshold}\n"
-                        f"Waktu: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+                        f"Waktu: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
                     )
                     await _send_telegram(msg)
                     AlertRuleRepository(db).touch_triggered(rule.id)
@@ -99,7 +99,7 @@ class NotificationService:
                 msg = (
                     f"*Ashenta Alert* – {rule.name}\n"
                     f"Kamera ID {event.camera_id} *OFFLINE/ERROR*\n"
-                    f"Waktu: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+                    f"Waktu: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
                 )
                 await _send_telegram(msg)
                 AlertRuleRepository(db).touch_triggered(rule.id)
@@ -108,5 +108,5 @@ class NotificationService:
     def _is_cooling(rule) -> bool:
         if rule.last_triggered_at is None:
             return False
-        elapsed = datetime.utcnow() - rule.last_triggered_at
+        last = rule.last_triggered_at; elapsed = datetime.now(timezone.utc) - (last if last.tzinfo else last.replace(tzinfo=timezone.utc))
         return elapsed < timedelta(minutes=rule.cooldown_minutes)

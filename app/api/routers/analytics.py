@@ -1,4 +1,4 @@
-"""Analytics router — DB-level aggregation, no Python loops for counting."""
+"""Analytics router - DB-level aggregation, dialect-aware for SQLite + PostgreSQL."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -28,6 +28,11 @@ def _parse_date(date_str: Optional[str]) -> datetime:
     )
 
 
+def _dialect(db: Session) -> str:
+    """Return 'postgresql' or 'sqlite' (or whatever the dialect name is)."""
+    return db.bind.dialect.name if db.bind else "sqlite"
+
+
 @router.get("/daily")
 def daily_counts(
     camera_id: Optional[int] = Query(None),
@@ -35,7 +40,7 @@ def daily_counts(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Entry/exit counts for a given day — single aggregation query."""
+    """Entry/exit counts for a given day - single aggregation query."""
     day = _parse_date(date)
     day_end = day + timedelta(days=1)
 
@@ -77,16 +82,22 @@ def trend(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Daily entry totals — aggregated in DB, not Python."""
+    """Daily entry totals - aggregated in DB, dialect-aware."""
     end = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     start = end - timedelta(days=days)
 
-    # Sum entries per day using DB-level date_trunc
+    # Use dialect-appropriate date truncation
+    if _dialect(db) == "postgresql":
+        day_expr = func.date_trunc("day", HourlyAggregate.hour_start).label("day")
+    else:
+        # SQLite: strftime returns a string like "2024-01-15"
+        day_expr = func.strftime("%Y-%m-%d", HourlyAggregate.hour_start).label("day")
+
     q = (
         db.query(
-            func.date_trunc("day", HourlyAggregate.hour_start).label("day"),
+            day_expr,
             func.sum(HourlyAggregate.entries).label("total"),
         )
         .filter(
@@ -118,7 +129,7 @@ def heatmap(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """7×24 heatmap of average entries by weekday × hour."""
+    """7x24 heatmap of average entries by weekday x hour."""
     return PeakHourAnalyzer(db).heatmap(
         camera_id=camera_id, weeks_back=weeks_back
     )
@@ -147,13 +158,19 @@ def hourly_counts(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Per-hour entry/exit counts for a given day."""
+    """Per-hour entry/exit counts for a given day - dialect-aware."""
     day = _parse_date(date)
     day_end = day + timedelta(days=1)
 
+    # Use dialect-appropriate hour extraction
+    if _dialect(db) == "postgresql":
+        hour_expr = func.extract("hour", CrossingEvent.timestamp).label("hour")
+    else:
+        hour_expr = func.strftime("%H", CrossingEvent.timestamp).label("hour")
+
     q = (
         db.query(
-            func.strftime("%H", CrossingEvent.timestamp).label("hour"),
+            hour_expr,
             CrossingEvent.direction,
             func.count(CrossingEvent.id).label("cnt"),
         )
@@ -195,14 +212,11 @@ def predictive(
     _=Depends(get_current_user),
 ):
     """Predict next 24-hour traffic based on historical hourly averages."""
-    # Use last 30 days of hourly aggregates to compute average per hour-of-day
-    from datetime import datetime, timezone, timedelta as td
     now = datetime.now(timezone.utc)
-    start = now - td(days=30)
+    start = now - timedelta(days=30)
 
-    # Use func.extract for PostgreSQL, func.strftime for SQLite
-    dialect = db.bind.dialect.name if db.bind else "sqlite"
-    if dialect == "postgresql":
+    # Use dialect-appropriate hour extraction
+    if _dialect(db) == "postgresql":
         hour_expr = func.extract("hour", HourlyAggregate.hour_start).label("hour")
     else:
         hour_expr = func.strftime("%H", HourlyAggregate.hour_start).label("hour")
