@@ -19,17 +19,70 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
   const bgRef     = useRef(null)   // background HTMLImageElement
   const [points,  setPoints]  = useState([])
   const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState('')
+
+  // ── Draw blank grid placeholder when no snapshot is available ───────────
+  const drawPlaceholder = (canvas, existingPoints) => {
+    const W = 640, H = 360
+    canvas.width  = W
+    canvas.height = H
+    const ctx = canvas.getContext('2d')
+
+    // Dark background
+    ctx.fillStyle = '#0d1117'
+    ctx.fillRect(0, 0, W, H)
+
+    // Grid lines
+    ctx.strokeStyle = '#1e2a3a'
+    ctx.lineWidth = 1
+    const cols = 8, rows = 5
+    for (let i = 1; i < cols; i++) {
+      ctx.beginPath(); ctx.moveTo((W / cols) * i, 0); ctx.lineTo((W / cols) * i, H); ctx.stroke()
+    }
+    for (let i = 1; i < rows; i++) {
+      ctx.beginPath(); ctx.moveTo(0, (H / rows) * i); ctx.lineTo(W, (H / rows) * i); ctx.stroke()
+    }
+
+    // Border
+    ctx.strokeStyle = '#2d3f55'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(1, 1, W - 2, H - 2)
+
+    // Camera icon + hint text
+    ctx.fillStyle = '#3a5070'
+    ctx.font = '48px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('📷', W / 2, H / 2 - 16)
+    ctx.font = '13px sans-serif'
+    ctx.fillStyle = '#5a7a9a'
+    ctx.fillText('Tidak ada frame — klik dua titik untuk menentukan garis', W / 2, H / 2 + 24)
+    ctx.textAlign = 'left'
+
+    // Restore existing line_config if any
+    if (existingPoints && existingPoints.length === 2) {
+      setPoints(existingPoints)
+    }
+  }
 
   // ── Load snapshot each time the modal opens ──────────────────────────────
   useEffect(() => {
     if (!open || !camera) return
-    setError('')
     setPoints([])
     bgRef.current = null
 
     let cancelled = false
     setLoading(true)
+
+    // Parse existing line_config once so both snapshot and placeholder can use it
+    let restoredPoints = null
+    if (camera.line_config) {
+      try {
+        const lc = JSON.parse(camera.line_config)
+        restoredPoints = [
+          { x: lc.x1 * 640, y: lc.y1 * 360 },
+          { x: lc.x2 * 640, y: lc.y2 * 360 },
+        ]
+      } catch (_) { /* ignore malformed */ }
+    }
 
     getStreamToken(camera.id)
       .then(res => {
@@ -37,7 +90,6 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
         const token = res.data.stream_token
 
         // Use the static JPEG snapshot endpoint — NOT the MJPEG stream.
-        // Browsers cannot load a multipart/x-mixed-replace stream as an img src.
         const snapshotUrl =
           `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
 
@@ -56,11 +108,10 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
           canvas.height = img.naturalHeight || 360
           canvas.getContext('2d').drawImage(img, 0, 0)
 
-          // Restore existing line_config if any
+          // Restore existing line_config with actual canvas dimensions
           if (camera.line_config) {
             try {
               const lc = JSON.parse(camera.line_config)
-              // line_config stores normalised coords (0–1); convert to canvas px
               setPoints([
                 { x: lc.x1 * canvas.width,  y: lc.y1 * canvas.height },
                 { x: lc.x2 * canvas.width,  y: lc.y2 * canvas.height },
@@ -71,19 +122,21 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
 
         img.onerror = () => {
           if (cancelled) return
+          // Camera inactive or no frames yet — fall back to blank canvas
+          // so the user can still configure the line without needing a live feed.
           setLoading(false)
-          setError(
-            'Frame belum tersedia. Pastikan kamera aktif dan sedang memproses video, lalu coba lagi.'
-          )
+          const canvas = canvasRef.current
+          if (canvas) drawPlaceholder(canvas, restoredPoints)
         }
 
         img.src = snapshotUrl
       })
       .catch(() => {
-        if (!cancelled) {
-          setLoading(false)
-          setError('Gagal mendapatkan token stream.')
-        }
+        if (cancelled) return
+        // Token fetch failed (auth error, network) — still show blank canvas
+        setLoading(false)
+        const canvas = canvasRef.current
+        if (canvas) drawPlaceholder(canvas, restoredPoints)
       })
 
     return () => { cancelled = true }
@@ -162,7 +215,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
   // ── Canvas click handler ─────────────────────────────────────────────────
   function handleCanvasClick(e) {
     const canvas = canvasRef.current
-    if (!canvas || loading || error) return
+    if (!canvas || loading) return
 
     const rect = canvas.getBoundingClientRect()
     // Scale display-px → canvas intrinsic-px
@@ -190,7 +243,6 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
       })
     },
     onSuccess: () => onSaved(),
-    onError:   (e) => setError(typeof e === 'string' ? e : 'Gagal menyimpan garis'),
   })
 
   if (!open || !camera) return null
@@ -221,51 +273,15 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
             </div>
           )}
 
-          {!loading && error && (
-            <div className={styles.canvasError}>
-              <span className={styles.canvasErrorIcon}>&#128247;</span>
-              <span className={styles.canvasErrorMsg}>{error}</span>
-              <Btn size="sm" variant="outline" onClick={() => {
-                setError('')
-                setLoading(true)
-                // Retry by closing and reopening — trigger useEffect
-                bgRef.current = null
-                getStreamToken(camera.id)
-                  .then(res => {
-                    const token = res.data.stream_token
-                    const img = new Image()
-                    img.crossOrigin = 'anonymous'
-                    img.onload = () => {
-                      bgRef.current = img
-                      setLoading(false)
-                      const canvas = canvasRef.current
-                      if (!canvas) return
-                      canvas.width  = img.naturalWidth  || 640
-                      canvas.height = img.naturalHeight || 360
-                      canvas.getContext('2d').drawImage(img, 0, 0)
-                    }
-                    img.onerror = () => {
-                      setLoading(false)
-                      setError('Frame belum tersedia. Pastikan kamera aktif.')
-                    }
-                    img.src = `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
-                  })
-                  .catch(() => { setLoading(false); setError('Gagal mendapatkan token.') })
-              }}>
-                Coba Lagi
-              </Btn>
-            </div>
-          )}
-
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
-            className={(!loading && !error) ? styles.canvas : styles.canvasHidden}
+            className={!loading ? styles.canvas : styles.canvasHidden}
           />
         </div>
 
         {/* Status */}
-        {!error && (
+        {(
           <div className={`${styles.status} ${
             points.length === 0 ? styles.statusWaiting :
             points.length === 1 ? styles.statusProgress :
@@ -300,7 +316,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
           <Btn variant="outline" onClick={onClose}>Batal</Btn>
           <Btn
             variant="primary"
-            disabled={points.length !== 2 || !!error}
+            disabled={points.length !== 2}
             loading={saveMut.isPending}
             onClick={() => saveMut.mutate()}
           >
