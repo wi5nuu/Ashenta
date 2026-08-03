@@ -200,9 +200,16 @@ def predictive(
     now = datetime.now(timezone.utc)
     start = now - td(days=30)
 
+    # Use func.extract for PostgreSQL, func.strftime for SQLite
+    dialect = db.bind.dialect.name if db.bind else "sqlite"
+    if dialect == "postgresql":
+        hour_expr = func.extract("hour", HourlyAggregate.hour_start).label("hour")
+    else:
+        hour_expr = func.strftime("%H", HourlyAggregate.hour_start).label("hour")
+
     q = (
         db.query(
-            func.strftime("%H", HourlyAggregate.hour_start).label("hour"),
+            hour_expr,
             func.avg(HourlyAggregate.entries).label("avg_entries"),
             func.avg(HourlyAggregate.exits).label("avg_exits"),
         )
@@ -210,7 +217,7 @@ def predictive(
     )
     if camera_id is not None:
         q = q.filter(HourlyAggregate.camera_id == camera_id)
-    q = q.group_by("hour").order_by("hour")
+    q = q.group_by(hour_expr).order_by(hour_expr)
 
     rows = q.all()
     if not rows:
