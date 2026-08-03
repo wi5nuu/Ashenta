@@ -37,11 +37,16 @@ class CameraUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-class LineConfigRequest(BaseModel):
+class LineItem(BaseModel):
     x1: float
     y1: float
     x2: float
     y2: float
+    label: Optional[str] = None
+
+
+class LineConfigRequest(BaseModel):
+    lines: List[LineItem]
 
 
 class CameraOut(BaseModel):
@@ -184,11 +189,15 @@ def set_line_config(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    line_dict = {"x1": body.x1, "y1": body.y1, "x2": body.x2, "y2": body.y2}
-    cam = CameraRepository(db).update_line_config(camera_id, line_dict)
+    # Store as array of line objects (multi-line support)
+    lines_list = [
+        {k: v for k, v in line.model_dump().items() if v is not None}
+        for line in body.lines
+    ]
+    cam = CameraRepository(db).update_line_config(camera_id, lines_list)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
-    get_camera_manager().reload_line(camera_id, json.dumps(line_dict))
+    get_camera_manager().reload_line(camera_id, json.dumps(lines_list))
     return _cam_out(cam)
 
 

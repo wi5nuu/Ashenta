@@ -354,3 +354,82 @@ class EntryExitCounter:
     def reset_daily(self) -> None:
         self._count_in = 0
         self._count_out = 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-line counter — aggregates N EntryExitCounter instances
+# ---------------------------------------------------------------------------
+
+class MultiLineCounter:
+    """
+    Wraps multiple EntryExitCounter instances (one per virtual line).
+    Exposes the same count_in / count_out / update / reset_daily interface
+    as EntryExitCounter so the rest of the codebase needs no changes.
+
+    Format of lines_config (JSON string stored in Camera.line_config):
+        [{"x1":0.1,"y1":0.5,"x2":0.9,"y2":0.5,"label":"Door A"}, ...]
+
+    Backward compat: if the stored value is a plain dict (single-line legacy)
+    it is automatically wrapped in a list.
+    """
+
+    def __init__(
+        self,
+        camera_id: int,
+        lines: List[LineConfig],
+        frame_w: int = 640,
+        frame_h: int = 480,
+    ):
+        self._counters: List[EntryExitCounter] = [
+            EntryExitCounter(camera_id=camera_id, line=line, frame_w=frame_w, frame_h=frame_h)
+            for line in lines
+        ]
+
+    def update(self, detections: List[Detection]) -> List[CrossingEvent]:
+        events: List[CrossingEvent] = []
+        for counter in self._counters:
+            events.extend(counter.update(detections))
+        return events
+
+    @property
+    def count_in(self) -> int:
+        return sum(c.count_in for c in self._counters)
+
+    @property
+    def count_out(self) -> int:
+        return sum(c.count_out for c in self._counters)
+
+    @property
+    def lines(self) -> List[LineConfig]:
+        return [c._line for c in self._counters]
+
+    @property
+    def _frame_w(self) -> int:
+        return self._counters[0]._frame_w if self._counters else 640
+
+    @property
+    def _frame_h(self) -> int:
+        return self._counters[0]._frame_h if self._counters else 480
+
+    def reset_daily(self) -> None:
+        for c in self._counters:
+            c.reset_daily()
+
+    @staticmethod
+    def parse_line_config(raw: str) -> Optional[List[LineConfig]]:
+        """
+        Parse line_config JSON string.  Returns a list of LineConfig or None.
+        Handles both legacy single-object format and new array format.
+        """
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                # Legacy single-line format — wrap in list
+                return [LineConfig.from_dict(parsed)]
+            if isinstance(parsed, list) and parsed:
+                return [LineConfig.from_dict(d) for d in parsed]
+        except (json.JSONDecodeError, KeyError):
+            pass
+        return None

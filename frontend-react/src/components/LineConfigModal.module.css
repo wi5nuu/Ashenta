@@ -228,3 +228,92 @@
 @media (max-width: 480px) {
   .header { padding-top: 2rem; }
 }
+
+/* ── Canvas padding ─────────────────────────────────────────────────────── */
+.canvasWrap { margin: 0 1.5rem 1rem; }
+.status     { margin: 0 1.5rem .875rem; }
+.saveError  { margin: 0 1.5rem .875rem; }
+
+/* ── Cancel draft button ─────────────────────────────────────────────────── */
+.cancelDraftBtn {
+  margin-left: auto;
+  padding: .2rem .625rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text3);
+  font-size: .75rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .1s, color .1s;
+}
+.cancelDraftBtn:hover { background: var(--surface4); color: var(--text); }
+
+/* ── Line list ───────────────────────────────────────────────────────────── */
+.lineList {
+  display: flex;
+  flex-direction: column;
+  gap: .375rem;
+  margin: 0 1.5rem 1rem;
+}
+.lineItem {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+  padding: .5rem .75rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.lineItem:hover { background: var(--surface3); border-color: var(--border2); }
+.lineItemSelected { border-color: var(--accent) !important; background: var(--accent-bg) !important; }
+
+.lineColourDot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.lineLabelInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: .8rem;
+  font-family: inherit;
+  min-width: 0;
+}
+.lineLabelInput::placeholder { color: var(--text4); }
+.lineCoords {
+  font-size: .7rem;
+  color: var(--text4);
+  font-family: monospace;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.deleteLineBtn {
+  width: 20px; height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--text4);
+  cursor: pointer;
+  font-size: .7rem;
+  flex-shrink: 0;
+  transition: background .1s, color .1s;
+  font-family: inherit;
+}
+.deleteLineBtn:hover { background: var(--danger-bg); color: var(--danger); }
+
+@media (max-width: 700px) {
+  .canvasWrap { margin: 0 1rem 1rem; }
+  .status     { margin: 0 1rem .875rem; }
+  .saveError  { margin: 0 1rem .875rem; }
+  .lineList   { margin: 0 1rem 1rem; }
+  .lineCoords { display: none; }
+}

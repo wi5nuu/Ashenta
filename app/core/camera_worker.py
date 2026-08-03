@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Optional
+from typing import Optional, List
 
 import asyncio
 import cv2
@@ -17,7 +17,7 @@ except ImportError:
 
 from app.config.logging import get_logger
 from app.core.vision import (
-    DetectorInterface, EntryExitCounter, LineConfig, CrossingEvent
+    DetectorInterface, EntryExitCounter, MultiLineCounter, LineConfig, CrossingEvent
 )
 from app.core.frame_broker import FrameBroker
 from app.core.events import EventBus, CounterUpdateEvent, CameraStatusEvent
@@ -37,7 +37,7 @@ _RECONNECT_BACKOFF   = 1.5
 def _draw_overlay(
     frame: np.ndarray,
     detections,
-    line: Optional[LineConfig],
+    lines: list,
     count_in: int,
     count_out: int,
     camera_name: str,
@@ -55,13 +55,21 @@ def _draw_overlay(
         cv2.putText(frame, label, (x1, max(y1 - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-    if line is not None:
+    # Draw each virtual line in a distinct colour
+    line_colours = [
+        (0, 0, 255),    # red
+        (255, 128, 0),  # orange
+        (255, 0, 255),  # magenta
+        (0, 255, 255),  # cyan
+        (128, 0, 255),  # purple
+    ]
+    for idx, line in enumerate(lines or []):
+        colour = line_colours[idx % len(line_colours)]
         pt1, pt2 = line.to_pixel(w, h)
-        # Red counting line with directional arrows
-        cv2.line(frame, pt1, pt2, (0, 0, 255), 2)
-        # Label the line ends
-        cv2.putText(frame, "IN", (pt1[0] + 4, pt1[1] - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
+        cv2.line(frame, pt1, pt2, colour, 2)
+        label_text = getattr(line, 'label', None) or f"L{idx + 1}"
+        cv2.putText(frame, label_text, (pt1[0] + 4, pt1[1] - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
 
     net = count_in - count_out
     # Semi-transparent HUD background
@@ -190,8 +198,8 @@ class CameraWorker:
 
         # RLock protects counter + line so reload is safe mid-frame
         self._counter_lock = threading.RLock()
-        self._counter: Optional[EntryExitCounter] = None
-        self._line: Optional[LineConfig] = None
+        self._counter: Optional[MultiLineCounter] = None
+        self._lines: List[LineConfig] = []
         self._reconnect_delay = _RECONNECT_DELAY_MIN
 
     # ------------------------------------------------------------------
@@ -236,11 +244,11 @@ class CameraWorker:
                 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
 
                 with self._counter_lock:
-                    self._line = self._parse_line()
-                    if self._line:
-                        self._counter = EntryExitCounter(
+                    self._lines = self._parse_lines()
+                    if self._lines:
+                        self._counter = MultiLineCounter(
                             camera_id=self._camera.id,
-                            line=self._line,
+                            lines=self._lines,
                             frame_w=w, frame_h=h,
                         )
 
@@ -269,13 +277,13 @@ class CameraWorker:
 
                         count_in  = self._counter.count_in  if self._counter else 0
                         count_out = self._counter.count_out if self._counter else 0
-                        line_snap = self._line
+                        lines_snap = self._lines
 
                     # Publish counter every frame so WS dashboard stays live
                     self._publish_counter(count_in, count_out)
 
                     annotated = _draw_overlay(
-                        frame.copy(), detections, line_snap,
+                        frame.copy(), detections, lines_snap,
                         count_in, count_out, self._camera.name,
                     )
                     self._broker.put_frame(self._camera.id, annotated)
@@ -303,15 +311,9 @@ class CameraWorker:
 
     # ------------------------------------------------------------------
 
-    def _parse_line(self) -> Optional[LineConfig]:
-        if not self._camera.line_config:
-            return None
-        try:
-            return LineConfig.from_dict(json.loads(self._camera.line_config))
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Invalid line_config",
-                           camera_id=self._camera.id, error=str(exc))
-            return None
+    def _parse_lines(self) -> List[LineConfig]:
+        """Parse line_config JSON string into a list of LineConfig. Handles legacy single-object format."""
+        return MultiLineCounter.parse_line_config(self._camera.line_config) or []
 
     def _set_status(self, status: CameraStatus) -> None:
         self._on_status(self._camera.id, status)
@@ -335,18 +337,22 @@ class CameraWorker:
         )
 
     def reload_line(self, line_config: str) -> None:
-        """Hot-reload virtual line without restarting the worker."""
+        """Hot-reload virtual lines without restarting the worker."""
         try:
-            new_line = LineConfig.from_dict(json.loads(line_config))
+            new_lines = MultiLineCounter.parse_line_config(line_config) or []
             with self._counter_lock:
                 w = self._counter._frame_w if self._counter else 640
                 h = self._counter._frame_h if self._counter else 480
-                self._line = new_line
-                self._counter = EntryExitCounter(
-                    camera_id=self._camera.id,
-                    line=new_line, frame_w=w, frame_h=h,
-                )
-            logger.info("Line config reloaded", camera_id=self._camera.id)
+                self._lines = new_lines
+                if new_lines:
+                    self._counter = MultiLineCounter(
+                        camera_id=self._camera.id,
+                        lines=new_lines, frame_w=w, frame_h=h,
+                    )
+                else:
+                    self._counter = None
+            logger.info("Line config reloaded", camera_id=self._camera.id,
+                        num_lines=len(new_lines))
         except Exception as exc:
             logger.error("reload_line failed",
                          camera_id=self._camera.id, error=str(exc))

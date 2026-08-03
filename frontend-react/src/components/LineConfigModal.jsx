@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation } from '@tanstack/react-query'
 import { getStreamToken, setLineConfig } from '../api'
@@ -6,266 +6,318 @@ import { Btn } from './UI'
 import styles from './LineConfigModal.module.css'
 
 /**
- * LineConfigModal — draw a virtual counting line on a camera snapshot.
+ * LineConfigModal — draw multiple virtual counting lines on a camera snapshot.
  *
- * Uses GET /stream/{id}/snapshot (returns a static JPEG) instead of the
- * MJPEG stream, so the browser can load it as a normal <img> and we can
- * draw on top of it with a <canvas>.
+ * Each line is defined by two clicks (A → B). Multiple lines can be added,
+ * labelled, and deleted independently. All lines are saved together as an array.
  *
- * Click two points to define the line. Coordinates are normalised 0–1
- * relative to the canvas intrinsic size (= image pixel size).
+ * Coordinates are normalised 0–1 relative to canvas intrinsic size.
  */
+
+// Distinct colours for up to 5 lines (cycles if more)
+const LINE_COLOURS = ['#38bdf8', '#f472b6', '#4ade80', '#fb923c', '#a78bfa']
+
+function getLineColour(idx) {
+  return LINE_COLOURS[idx % LINE_COLOURS.length]
+}
+
+// Parse line_config JSON → array of {x1,y1,x2,y2,label?}
+function parseExistingLines(lineConfig) {
+  if (!lineConfig) return []
+  try {
+    const parsed = JSON.parse(lineConfig)
+    if (Array.isArray(parsed)) return parsed
+    if (parsed && typeof parsed === 'object' && 'x1' in parsed) return [parsed]
+  } catch (_) {}
+  return []
+}
+
 export default function LineConfigModal({ open, camera, onClose, onSaved }) {
   const canvasRef = useRef(null)
   const bgRef     = useRef(null)   // background HTMLImageElement
-  const [points,  setPoints]  = useState([])
-  const [loading, setLoading] = useState(false)
+  const [loading,       setLoading]       = useState(false)
+  // savedLines: array of fully-defined lines {x1,y1,x2,y2,label,_px:{p1,p2}}
+  const [savedLines,    setSavedLines]    = useState([])
+  // draftPoints: 0, 1, or 2 canvas-px points for the line being drawn
+  const [draftPoints,   setDraftPoints]   = useState([])
+  // which line index is selected for label editing (-1 = none)
+  const [selectedLine,  setSelectedLine]  = useState(-1)
 
-  // ── Draw blank grid placeholder when no snapshot is available ───────────
-  const drawPlaceholder = (canvas, existingPoints) => {
+  // ── Canvas dimensions (intrinsic) ─────────────────────────────────────────
+  const canvasW = () => canvasRef.current?.width  || 640
+  const canvasH = () => canvasRef.current?.height || 360
+
+  // ── Draw blank placeholder ────────────────────────────────────────────────
+  const drawPlaceholder = useCallback((canvas) => {
     const W = 640, H = 360
     canvas.width  = W
     canvas.height = H
     const ctx = canvas.getContext('2d')
-
-    // Dark background
     ctx.fillStyle = '#0d1117'
     ctx.fillRect(0, 0, W, H)
-
-    // Grid lines
     ctx.strokeStyle = '#1e2a3a'
     ctx.lineWidth = 1
-    const cols = 8, rows = 5
-    for (let i = 1; i < cols; i++) {
-      ctx.beginPath(); ctx.moveTo((W / cols) * i, 0); ctx.lineTo((W / cols) * i, H); ctx.stroke()
+    for (let i = 1; i < 8; i++) {
+      ctx.beginPath(); ctx.moveTo((W / 8) * i, 0); ctx.lineTo((W / 8) * i, H); ctx.stroke()
     }
-    for (let i = 1; i < rows; i++) {
-      ctx.beginPath(); ctx.moveTo(0, (H / rows) * i); ctx.lineTo(W, (H / rows) * i); ctx.stroke()
+    for (let i = 1; i < 5; i++) {
+      ctx.beginPath(); ctx.moveTo(0, (H / 5) * i); ctx.lineTo(W, (H / 5) * i); ctx.stroke()
     }
-
-    // Border
-    ctx.strokeStyle = '#2d3f55'
-    ctx.lineWidth = 1.5
+    ctx.strokeStyle = '#2d3f55'; ctx.lineWidth = 1.5
     ctx.strokeRect(1, 1, W - 2, H - 2)
-
-    // Camera icon + hint text
-    ctx.fillStyle = '#3a5070'
-    ctx.font = '48px sans-serif'
-    ctx.textAlign = 'center'
+    ctx.fillStyle = '#3a5070'; ctx.font = '48px sans-serif'; ctx.textAlign = 'center'
     ctx.fillText('📷', W / 2, H / 2 - 16)
-    ctx.font = '13px sans-serif'
-    ctx.fillStyle = '#5a7a9a'
+    ctx.font = '13px sans-serif'; ctx.fillStyle = '#5a7a9a'
     ctx.fillText('Tidak ada frame — klik dua titik untuk menentukan garis', W / 2, H / 2 + 24)
     ctx.textAlign = 'left'
+  }, [])
 
-    // Restore existing line_config if any
-    if (existingPoints && existingPoints.length === 2) {
-      setPoints(existingPoints)
-    }
-  }
-
-  // ── Load snapshot each time the modal opens ──────────────────────────────
+  // ── Load snapshot when modal opens ───────────────────────────────────────
   useEffect(() => {
     if (!open || !camera) return
-    setPoints([])
+    setDraftPoints([])
+    setSelectedLine(-1)
     bgRef.current = null
+
+    // Restore existing lines converted to canvas-px (will be re-scaled after img loads)
+    const existing = parseExistingLines(camera.line_config)
 
     let cancelled = false
     setLoading(true)
-
-    // Parse existing line_config once so both snapshot and placeholder can use it
-    let restoredPoints = null
-    if (camera.line_config) {
-      try {
-        const lc = JSON.parse(camera.line_config)
-        restoredPoints = [
-          { x: lc.x1 * 640, y: lc.y1 * 360 },
-          { x: lc.x2 * 640, y: lc.y2 * 360 },
-        ]
-      } catch (_) { /* ignore malformed */ }
-    }
 
     getStreamToken(camera.id)
       .then(res => {
         if (cancelled) return
         const token = res.data.stream_token
-
-        // Use the static JPEG snapshot endpoint — NOT the MJPEG stream.
-        const snapshotUrl =
-          `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
-
+        const snapshotUrl = `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
         const img = new Image()
         img.crossOrigin = 'anonymous'
-
         img.onload = () => {
           if (cancelled) return
           bgRef.current = img
           setLoading(false)
-
           const canvas = canvasRef.current
           if (!canvas) return
-          // Set canvas intrinsic size = image pixel size for 1:1 coordinate mapping
           canvas.width  = img.naturalWidth  || 640
           canvas.height = img.naturalHeight || 360
           canvas.getContext('2d').drawImage(img, 0, 0)
-
-          // Restore existing line_config with actual canvas dimensions
-          if (camera.line_config) {
-            try {
-              const lc = JSON.parse(camera.line_config)
-              setPoints([
-                { x: lc.x1 * canvas.width,  y: lc.y1 * canvas.height },
-                { x: lc.x2 * canvas.width,  y: lc.y2 * canvas.height },
-              ])
-            } catch (_) { /* ignore malformed */ }
-          }
+          // Restore lines in canvas-px using actual canvas dimensions
+          const W = canvas.width, H = canvas.height
+          setSavedLines(existing.map((lc, i) => ({
+            ...lc,
+            label: lc.label || `Garis ${i + 1}`,
+            _px: {
+              p1: { x: lc.x1 * W, y: lc.y1 * H },
+              p2: { x: lc.x2 * W, y: lc.y2 * H },
+            },
+          })))
         }
-
         img.onerror = () => {
           if (cancelled) return
-          // Camera inactive or no frames yet — fall back to blank canvas
-          // so the user can still configure the line without needing a live feed.
           setLoading(false)
           const canvas = canvasRef.current
-          if (canvas) drawPlaceholder(canvas, restoredPoints)
+          if (canvas) {
+            drawPlaceholder(canvas)
+            const W = canvas.width, H = canvas.height
+            setSavedLines(existing.map((lc, i) => ({
+              ...lc,
+              label: lc.label || `Garis ${i + 1}`,
+              _px: {
+                p1: { x: lc.x1 * W, y: lc.y1 * H },
+                p2: { x: lc.x2 * W, y: lc.y2 * H },
+              },
+            })))
+          }
         }
-
         img.src = snapshotUrl
       })
       .catch(() => {
         if (cancelled) return
-        // Token fetch failed (auth error, network) — still show blank canvas
         setLoading(false)
         const canvas = canvasRef.current
-        if (canvas) drawPlaceholder(canvas, restoredPoints)
+        if (canvas) {
+          drawPlaceholder(canvas)
+          const W = canvas.width, H = canvas.height
+          setSavedLines(existing.map((lc, i) => ({
+            ...lc,
+            label: lc.label || `Garis ${i + 1}`,
+            _px: {
+              p1: { x: lc.x1 * W, y: lc.y1 * H },
+              p2: { x: lc.x2 * W, y: lc.y2 * H },
+            },
+          })))
+        }
       })
 
     return () => { cancelled = true }
   }, [open, camera?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Redraw overlay whenever points change ────────────────────────────────
+  // ── Redraw canvas whenever lines or draft changes ─────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !bgRef.current) return
-
+    if (!canvas) return
     const ctx = canvas.getContext('2d')
-    const W   = canvas.width
-    const H   = canvas.height
+    const W = canvas.width, H = canvas.height
 
-    // Redraw background
-    ctx.drawImage(bgRef.current, 0, 0)
-    if (points.length === 0) return
+    // Background
+    if (bgRef.current) {
+      ctx.drawImage(bgRef.current, 0, 0)
+    } else {
+      ctx.fillStyle = '#0d1117'
+      ctx.fillRect(0, 0, W, H)
+    }
 
-    // Points are already in canvas-px (intrinsic space)
-    const p = points
+    // Draw all saved lines
+    savedLines.forEach((line, idx) => {
+      const colour = getLineColour(idx)
+      const { p1, p2 } = line._px
+      const isSelected = idx === selectedLine
 
-    // Point A
-    ctx.beginPath()
-    ctx.arc(p[0].x, p[0].y, 8, 0, Math.PI * 2)
-    ctx.fillStyle   = '#38bdf8'
-    ctx.fill()
-    ctx.strokeStyle = '#0f172a'
-    ctx.lineWidth   = 2
-    ctx.stroke()
+      // Line
+      ctx.beginPath()
+      ctx.moveTo(p1.x, p1.y)
+      ctx.lineTo(p2.x, p2.y)
+      ctx.strokeStyle = colour
+      ctx.lineWidth   = isSelected ? 4 : 2.5
+      ctx.setLineDash(isSelected ? [6, 3] : [])
+      ctx.stroke()
+      ctx.setLineDash([])
 
-    if (p.length < 2) return
+      // Points
+      ;[p1, p2].forEach((pt, pi) => {
+        ctx.beginPath()
+        ctx.arc(pt.x, pt.y, isSelected ? 9 : 7, 0, Math.PI * 2)
+        ctx.fillStyle = pi === 0 ? colour : '#fff'
+        ctx.fill()
+        ctx.strokeStyle = '#0f172a'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      })
 
-    // Line A→B
-    ctx.beginPath()
-    ctx.moveTo(p[0].x, p[0].y)
-    ctx.lineTo(p[1].x, p[1].y)
-    ctx.strokeStyle = '#38bdf8'
-    ctx.lineWidth   = 3
-    ctx.setLineDash([10, 5])
-    ctx.stroke()
-    ctx.setLineDash([])
+      // Arrow at midpoint
+      const mx    = (p1.x + p2.x) / 2
+      const my    = (p1.y + p2.y) / 2
+      const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x) - Math.PI / 2
+      ctx.save()
+      ctx.translate(mx, my)
+      ctx.rotate(angle)
+      ctx.beginPath()
+      ctx.moveTo(0, -12)
+      ctx.lineTo(7, 4)
+      ctx.lineTo(-7, 4)
+      ctx.closePath()
+      ctx.fillStyle = colour
+      ctx.globalAlpha = 0.85
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.restore()
 
-    // Point B
-    ctx.beginPath()
-    ctx.arc(p[1].x, p[1].y, 8, 0, Math.PI * 2)
-    ctx.fillStyle   = '#f472b6'
-    ctx.fill()
-    ctx.strokeStyle = '#0f172a'
-    ctx.lineWidth   = 2
-    ctx.stroke()
+      // Label
+      const label = line.label || `L${idx + 1}`
+      ctx.font      = `bold ${Math.max(11, W * 0.018)}px monospace`
+      ctx.fillStyle = colour
+      ctx.strokeStyle = '#0f172a'
+      ctx.lineWidth = 3
+      ctx.strokeText(label, p1.x + 10, p1.y - 6)
+      ctx.fillText(label, p1.x + 10, p1.y - 6)
+    })
 
-    // Arrow at midpoint perpendicular to line (shows IN direction)
-    const mx    = (p[0].x + p[1].x) / 2
-    const my    = (p[0].y + p[1].y) / 2
-    const angle = Math.atan2(p[1].y - p[0].y, p[1].x - p[0].x) - Math.PI / 2
-    ctx.save()
-    ctx.translate(mx, my)
-    ctx.rotate(angle)
-    ctx.beginPath()
-    ctx.moveTo(0, -14)
-    ctx.lineTo(8, 4)
-    ctx.lineTo(-8, 4)
-    ctx.closePath()
-    ctx.fillStyle = '#4ade80'
-    ctx.fill()
-    ctx.restore()
+    // Draw draft line being placed
+    if (draftPoints.length >= 1) {
+      const colour = getLineColour(savedLines.length)
+      const p = draftPoints[0]
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 8, 0, Math.PI * 2)
+      ctx.fillStyle = colour
+      ctx.fill()
+      ctx.strokeStyle = '#0f172a'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.font = `bold ${Math.max(11, W * 0.018)}px monospace`
+      ctx.fillStyle = colour
+      ctx.fillText('A', p.x + 10, p.y - 6)
+    }
+  }, [savedLines, draftPoints, selectedLine])
 
-    // Labels
-    ctx.font      = `bold ${Math.max(12, W * 0.022)}px monospace`
-    ctx.fillStyle = '#38bdf8'
-    ctx.fillText('A (IN)',  p[0].x + 12, p[0].y - 8)
-    ctx.fillStyle = '#f472b6'
-    ctx.fillText('B (OUT)', p[1].x + 12, p[1].y + 18)
-  }, [points])
-
-  // ── Canvas click handler ─────────────────────────────────────────────────
+  // ── Canvas click handler ──────────────────────────────────────────────────
   function handleCanvasClick(e) {
     const canvas = canvasRef.current
     if (!canvas || loading) return
 
-    const rect = canvas.getBoundingClientRect()
-    // Scale display-px → canvas intrinsic-px
+    const rect   = canvas.getBoundingClientRect()
     const scaleX = canvas.width  / rect.width
     const scaleY = canvas.height / rect.height
-    const x = (e.clientX - rect.left)  * scaleX
-    const y = (e.clientY - rect.top)   * scaleY
+    const x = (e.clientX - rect.left) * scaleX
+    const y = (e.clientY - rect.top)  * scaleY
 
-    setPoints(prev => prev.length >= 2 ? [{ x, y }] : [...prev, { x, y }])
+    if (draftPoints.length === 0) {
+      // First click: start new line
+      setDraftPoints([{ x, y }])
+      setSelectedLine(-1)
+    } else {
+      // Second click: complete the line
+      const p1 = draftPoints[0]
+      const p2 = { x, y }
+      const W  = canvasW(), H = canvasH()
+      const newLine = {
+        x1: p1.x / W, y1: p1.y / H,
+        x2: p2.x / W, y2: p2.y / H,
+        label: `Garis ${savedLines.length + 1}`,
+        _px: { p1, p2 },
+      }
+      setSavedLines(prev => [...prev, newLine])
+      setDraftPoints([])
+      setSelectedLine(savedLines.length) // auto-select new line
+    }
   }
 
-  // ── Save mutation ────────────────────────────────────────────────────────
+  function deleteLine(idx) {
+    setSavedLines(prev => prev.filter((_, i) => i !== idx))
+    setSelectedLine(-1)
+  }
+
+  function updateLabel(idx, label) {
+    setSavedLines(prev => prev.map((l, i) => i === idx ? { ...l, label } : l))
+  }
+
+  function cancelDraft() {
+    setDraftPoints([])
+  }
+
+  // ── Save mutation ─────────────────────────────────────────────────────────
   const saveMut = useMutation({
     mutationFn: async () => {
-      if (points.length !== 2) throw new Error('Tentukan dua titik terlebih dahulu')
-      const canvas = canvasRef.current
-      const W = canvas?.width  || 640
-      const H = canvas?.height || 360
-      // Normalise canvas-px → 0–1 using intrinsic canvas size
-      await setLineConfig(camera.id, {
-        x1: points[0].x / W,
-        y1: points[0].y / H,
-        x2: points[1].x / W,
-        y2: points[1].y / H,
-      })
+      if (savedLines.length === 0) throw new Error('Tambahkan minimal satu garis')
+      // Strip internal _px before sending
+      const lines = savedLines.map(({ _px: _ignored, ...rest }) => rest)
+      await setLineConfig(camera.id, { lines })
     },
     onSuccess: () => onSaved(),
   })
 
   if (!open || !camera) return null
 
+  const draftActive   = draftPoints.length === 1
+  const canAddMore    = savedLines.length < 5
+
   return createPortal(
     <div className={styles.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div className={styles.modal}>
+
         {/* Header */}
         <div className={styles.header}>
           <div className={styles.headerText}>
-            <div className={styles.title}>Set Garis Virtual — {camera.name}</div>
+            <div className={styles.title}>Garis Virtual — {camera.name}</div>
             <p className={styles.subtitle}>
               Klik titik <strong style={{ color: '#38bdf8' }}>A</strong> lalu titik{' '}
-              <strong style={{ color: '#f472b6' }}>B</strong> di atas frame untuk menentukan garis counting.
-              Orang yang menyeberangi dari sisi <strong>A ke B</strong> dihitung sebagai{' '}
-              <strong>masuk (IN)</strong>. Klik lagi untuk menggambar ulang.
+              <strong style={{ color: '#fff' }}>B</strong> untuk membuat garis counting.
+              Bisa tambah hingga 5 garis. Klik garis untuk memilih &amp; edit label.
             </p>
           </div>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Tutup">✕</button>
         </div>
 
-        {/* Canvas area */}
+        {/* Canvas */}
         <div className={styles.canvasWrap}>
           {loading && (
             <div className={styles.canvasLoader}>
@@ -273,31 +325,69 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
               Memuat snapshot kamera...
             </div>
           )}
-
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
             className={!loading ? styles.canvas : styles.canvasHidden}
+            style={{ cursor: loading ? 'default' : 'crosshair' }}
           />
         </div>
 
-        {/* Status */}
-        {(
-          <div className={`${styles.status} ${
-            points.length === 0 ? styles.statusWaiting :
-            points.length === 1 ? styles.statusProgress :
-            styles.statusReady
-          }`}>
-            <span className={styles.statusDot} />
-            <span className={styles.statusText}>
-              {points.length === 0 && !loading && 'Klik pada frame untuk menentukan titik A (IN)'}
-              {points.length === 1 && 'Klik lagi untuk menentukan titik B (OUT)'}
-              {points.length === 2 && (
-                <span className={styles.statusReadyText}>
-                  Garis siap — klik "Simpan" atau klik frame untuk menggambar ulang
+        {/* Status bar */}
+        <div className={`${styles.status} ${
+          draftActive        ? styles.statusProgress :
+          savedLines.length  ? styles.statusReady    :
+          styles.statusWaiting
+        }`}>
+          <span className={styles.statusDot} />
+          <span className={styles.statusText}>
+            {loading        && 'Memuat snapshot...'}
+            {!loading && draftActive  && 'Klik titik B untuk menyelesaikan garis'}
+            {!loading && !draftActive && savedLines.length === 0 && 'Klik frame untuk menentukan titik A garis pertama'}
+            {!loading && !draftActive && savedLines.length > 0  && (
+              <span className={styles.statusReadyText}>
+                {savedLines.length} garis terdefinisi
+                {canAddMore ? ' — klik frame untuk tambah garis baru' : ' (maks 5 garis)'}
+              </span>
+            )}
+          </span>
+          {draftActive && (
+            <button className={styles.cancelDraftBtn} onClick={cancelDraft}>Batal</button>
+          )}
+        </div>
+
+        {/* Line list */}
+        {savedLines.length > 0 && (
+          <div className={styles.lineList}>
+            {savedLines.map((line, idx) => (
+              <div
+                key={idx}
+                className={`${styles.lineItem} ${selectedLine === idx ? styles.lineItemSelected : ''}`}
+                onClick={() => setSelectedLine(idx === selectedLine ? -1 : idx)}
+              >
+                <span
+                  className={styles.lineColourDot}
+                  style={{ background: getLineColour(idx) }}
+                />
+                <input
+                  className={styles.lineLabelInput}
+                  value={line.label || `Garis ${idx + 1}`}
+                  onChange={e => { e.stopPropagation(); updateLabel(idx, e.target.value) }}
+                  onClick={e => e.stopPropagation()}
+                  placeholder={`Garis ${idx + 1}`}
+                  maxLength={30}
+                />
+                <span className={styles.lineCoords}>
+                  ({Math.round(line.x1 * 100)}%,{Math.round(line.y1 * 100)}%) →
+                  ({Math.round(line.x2 * 100)}%,{Math.round(line.y2 * 100)}%)
                 </span>
-              )}
-            </span>
+                <button
+                  className={styles.deleteLineBtn}
+                  onClick={e => { e.stopPropagation(); deleteLine(idx) }}
+                  title="Hapus garis ini"
+                >✕</button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -307,21 +397,23 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
               <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
               <path d="M6 4v2.5M6 8h.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
             </svg>
-            {typeof saveMut.error === 'string' ? saveMut.error : 'Gagal menyimpan garis'}
+            {saveMut.error?.message || 'Gagal menyimpan garis'}
           </div>
         )}
 
         {/* Footer */}
         <div className={styles.footer}>
-          <Btn variant="outline" onClick={() => setPoints([])}>Reset</Btn>
+          <Btn variant="outline" onClick={() => { setSavedLines([]); setDraftPoints([]); setSelectedLine(-1) }}>
+            Reset Semua
+          </Btn>
           <Btn variant="outline" onClick={onClose}>Batal</Btn>
           <Btn
             variant="primary"
-            disabled={points.length !== 2}
+            disabled={savedLines.length === 0 || draftActive}
             loading={saveMut.isPending}
             onClick={() => saveMut.mutate()}
           >
-            Simpan Garis
+            Simpan {savedLines.length > 0 ? `(${savedLines.length} Garis)` : ''}
           </Btn>
         </div>
       </div>

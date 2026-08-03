@@ -47,6 +47,15 @@ export default function CameraCard({
   const isActive = status === 'active'
   const isError  = status === 'error'
   const hasLine  = !!camera.line_config
+  const lineCount = (() => {
+    if (!camera.line_config) return 0
+    try {
+      const parsed = JSON.parse(camera.line_config)
+      if (Array.isArray(parsed)) return parsed.length
+      if (parsed && typeof parsed === 'object' && 'x1' in parsed) return 1
+    } catch (_) {}
+    return 0
+  })()
 
   async function startStream() {
     setStreamErr(false)
@@ -71,8 +80,15 @@ export default function CameraCard({
   let lineInfo = null
   if (camera.line_config) {
     try {
-      const lc = JSON.parse(camera.line_config)
-      lineInfo = `(${Math.round(lc.x1 * 100)}%,${Math.round(lc.y1 * 100)}%) → (${Math.round(lc.x2 * 100)}%,${Math.round(lc.y2 * 100)}%)`
+      const parsed = JSON.parse(camera.line_config)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const lc = parsed[0]
+        lineInfo = parsed.length === 1
+          ? `(${Math.round(lc.x1 * 100)}%,${Math.round(lc.y1 * 100)}%) → (${Math.round(lc.x2 * 100)}%,${Math.round(lc.y2 * 100)}%)`
+          : `${parsed.length} garis virtual`
+      } else if (parsed && typeof parsed === 'object' && 'x1' in parsed) {
+        lineInfo = `(${Math.round(parsed.x1 * 100)}%,${Math.round(parsed.y1 * 100)}%) → (${Math.round(parsed.x2 * 100)}%,${Math.round(parsed.y2 * 100)}%)`
+      }
     } catch (_) {}
   }
 
@@ -175,7 +191,7 @@ export default function CameraCard({
             {/* Line config indicator inline */}
             <span className={`${styles.lineIndicator} ${hasLine ? styles.lineIndicatorSet : ''}`}>
               <span className={styles.lineIndicatorDot} />
-              {hasLine ? 'Garis terset' : 'Garis belum diset'}
+              {hasLine ? `Garis terset (${lineCount})` : 'Garis belum diset'}
             </span>
           </div>
         </div>
@@ -224,7 +240,9 @@ export default function CameraCard({
           <div className={styles.detailRow}>
             <span className={styles.detailKey}>Garis virtual</span>
             <span className={`${styles.detailVal} ${hasLine ? styles.detailValSuccess : styles.detailValMuted}`}>
-              {hasLine ? `Set — ${lineInfo || 'konfigurasi tersimpan'}` : 'Belum dikonfigurasi'}
+              {hasLine
+                ? `${lineCount} garis — ${lineInfo || 'konfigurasi tersimpan'}`
+                : 'Belum dikonfigurasi'}
             </span>
           </div>
           <div className={styles.detailRow}>
