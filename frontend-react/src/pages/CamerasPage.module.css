@@ -36,7 +36,7 @@
 .statsBar {
   display: flex;
   gap: .75rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   flex-wrap: wrap;
 }
 .statPill {
@@ -44,7 +44,7 @@
   align-items: center;
   gap: .5rem;
   padding: .4375rem .875rem;
-  background: var(--surface);
+  background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   font-size: .8rem;
@@ -56,18 +56,69 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.statPillActive .statPillDot {
-  background: var(--success);
-  box-shadow: 0 0 5px var(--success);
-  animation: blink 2.5s ease infinite;
-}
-.statPillTotal .statPillDot { background: var(--text4); }
 .statPillNum {
   font-weight: 600;
   color: var(--text);
   letter-spacing: -.02em;
 }
+/* dot variants */
+.dotActive   { background: var(--success); box-shadow: 0 0 5px var(--success); animation: blink 2.5s ease infinite; }
+.dotNeutral  { background: var(--text4); }
+.dotError    { background: var(--danger); box-shadow: 0 0 4px var(--danger); }
+/* pill variants */
+.statPillActive  { border-color: rgba(52,211,153,.2); }
+.statPillError   { border-color: rgba(248,113,113,.2); background: var(--danger-bg); color: var(--danger); }
+.statPillError .statPillNum { color: var(--danger); }
+.statPillNeutral {}
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* ── Filter bar ─────────────────────────────────────────────────────────── */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+.filterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .35rem .75rem;
+  border-radius: var(--radius);
+  font-size: .8rem;
+  font-weight: 500;
+  color: var(--text3);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .1s, color .1s, border-color .1s;
+}
+.filterBtn:hover { background: var(--surface3); color: var(--text2); border-color: var(--border2); }
+.filterBtnActive {
+  background: var(--surface4);
+  color: var(--text);
+  border-color: var(--border3);
+}
+.filterBtnError { color: var(--danger); }
+.filterBtnError:hover { background: var(--danger-bg); border-color: var(--danger-border); }
+.filterBtnError.filterBtnActive { background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger); }
+.filterCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 .3rem;
+  border-radius: 99px;
+  background: var(--surface4);
+  color: var(--text4);
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.filterCountActive { background: var(--surface5); color: var(--text2); }
 
 /* ── Grid ───────────────────────────────────────────────────────────────── */
 .grid {
