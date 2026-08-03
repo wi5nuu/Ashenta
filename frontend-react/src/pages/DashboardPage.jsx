@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useWsStore } from '../store'
 import { getCameras, getDaily } from '../api'
-import { Card, CardTitle, StatCard, LiveDot, Badge, Btn } from '../components/UI'
+import { Card, CardTitle, LiveDot, Skeleton } from '../components/UI'
 import CameraCard from '../components/CameraCard'
 import styles from './DashboardPage.module.css'
 
@@ -21,49 +21,103 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   })
 
-  // Merge WS live counters with DB daily totals
-  const totalIn  = Object.values(counters).reduce((s, c) => s + (c.in  || 0), 0) || daily?.entries || 0
-  const totalOut = Object.values(counters).reduce((s, c) => s + (c.out || 0), 0) || daily?.exits   || 0
-  const activeCams = cameras.filter(c => c.status === 'active').length
+  // WS counters = live realtime, fallback ke daily REST jika WS belum ada data
+  const wsHasData  = Object.keys(counters).length > 0
+  const totalIn    = wsHasData
+    ? Object.values(counters).reduce((s, c) => s + (c.in  || 0), 0)
+    : (daily?.entries || 0)
+  const totalOut   = wsHasData
+    ? Object.values(counters).reduce((s, c) => s + (c.out || 0), 0)
+    : (daily?.exits   || 0)
+  const net        = totalIn - totalOut
+
+  // Merge WS statuses ke camera list
+  const wsStatuses = useWsStore(s => s.cameraStatuses)
+  const activeCams = cameras.filter(c => (wsStatuses[c.id] ?? c.status) === 'active').length
 
   const dateStr = new Date().toLocaleDateString('id-ID', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
 
   return (
-    <div>
+    <div className="fadeUp">
+      {/* Header */}
       <div className={styles.header}>
-        <h2>Dashboard Live</h2>
+        <h2 className={styles.title}>Dashboard</h2>
         <LiveDot />
         <span className={styles.date}>{dateStr}</span>
       </div>
 
-      <div className={styles.statsRow}>
-        <StatCard title="Total Masuk Hari Ini" value={totalIn}  loading={dailyLoading} />
-        <StatCard title="Total Keluar Hari Ini" value={totalOut} loading={dailyLoading} />
-        <StatCard title="Net Pengunjung" value={totalIn - totalOut} loading={dailyLoading} />
-        <StatCard title="Kamera Aktif" value={`${activeCams} / ${cameras.length}`} loading={camLoading} />
+      {/* Stats */}
+      <div className={styles.stats}>
+        <Card>
+          <CardTitle>Total Masuk</CardTitle>
+          {dailyLoading
+            ? <Skeleton height={28} width={64} />
+            : <div className={styles.statNum}>{totalIn}</div>
+          }
+          <div className={styles.statLabel}>pengunjung hari ini</div>
+        </Card>
+
+        <Card>
+          <CardTitle>Total Keluar</CardTitle>
+          {dailyLoading
+            ? <Skeleton height={28} width={64} />
+            : <div className={styles.statNum}>{totalOut}</div>
+          }
+          <div className={styles.statLabel}>pengunjung hari ini</div>
+        </Card>
+
+        <Card>
+          <CardTitle>Di Dalam</CardTitle>
+          {dailyLoading
+            ? <Skeleton height={28} width={64} />
+            : <div className={styles.statNum} style={{ color: net < 0 ? 'var(--danger)' : 'var(--text)' }}>{net}</div>
+          }
+          <div className={styles.statLabel}>estimasi saat ini</div>
+        </Card>
+
+        <Card>
+          <CardTitle>Kamera Aktif</CardTitle>
+          {camLoading
+            ? <Skeleton height={28} width={64} />
+            : <div className={styles.statNum}>
+                {activeCams}
+                <span className={styles.statDen}> / {cameras.length}</span>
+              </div>
+          }
+          <div className={styles.statLabel}>dari total kamera</div>
+        </Card>
       </div>
 
-      <div className={styles.sectionHeader}>
-        <h3>Live Feed</h3>
-      </div>
+      {/* Live feed */}
+      <div className={styles.section}>
+        <div className={styles.sectionHead}>
+          <div className={styles.sectionTitle}>
+            <LiveDot />
+            Live Feed
+          </div>
+          <span className={styles.sectionMeta}>{cameras.length} kamera</span>
+        </div>
 
-      {camLoading ? (
-        <div className={styles.grid}>
-          {[1,2].map(i => <div key={i} className={styles.skeletonCard} />)}
-        </div>
-      ) : cameras.length === 0 ? (
-        <Card><p style={{color:'var(--muted)',textAlign:'center',padding:'2rem'}}>
-          Belum ada kamera. Tambahkan di tab <strong>Kamera</strong>.
-        </p></Card>
-      ) : (
-        <div className={styles.grid}>
-          {cameras.map(cam => (
-            <CameraCard key={cam.id} camera={cam} counter={counters[cam.id]} />
-          ))}
-        </div>
-      )}
+        {camLoading ? (
+          <div className={styles.grid}>
+            {[1, 2, 3].map(i => <div key={i} className={styles.skeletonCard} />)}
+          </div>
+        ) : cameras.length === 0 ? (
+          <Card>
+            <div className={styles.empty}>
+              Belum ada kamera. Tambahkan di halaman <strong>Kamera</strong>.
+            </div>
+          </Card>
+        ) : (
+          <div className={styles.grid}>
+            {cameras.map(cam => (
+              <CameraCard key={cam.id} camera={cam} counter={counters[cam.id]} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

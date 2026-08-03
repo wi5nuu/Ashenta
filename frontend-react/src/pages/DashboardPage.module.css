@@ -1,43 +1,102 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   DASHBOARD PAGE
+   ═══════════════════════════════════════════════════════════════════════════ */
 .header {
   display: flex;
   align-items: center;
-  gap: .75rem;
-  margin-bottom: 1.25rem;
+  gap: .625rem;
+  margin-bottom: 1.75rem;
 }
-.header h2 { font-size: 1.1rem; font-weight: 700; }
-.date { color: var(--muted); font-size: .875rem; }
+.title {
+  font-size: 1.125rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -.025em;
+  flex: 1;
+}
+.date {
+  font-size: .75rem;
+  color: var(--text4);
+  letter-spacing: -.005em;
+}
 
-.statsRow {
+/* ── Stats grid ─────────────────────────────────────────────────────────── */
+.stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+  gap: .875rem;
+  margin-bottom: 2rem;
+}
+.statNum {
+  font-size: 1.875rem;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: -.04em;
+  margin-bottom: .25rem;
+}
+.statDen {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--text4);
+}
+.statLabel {
+  font-size: .6875rem;
+  color: var(--text4);
+  letter-spacing: .01em;
+  text-transform: uppercase;
 }
 
-.sectionHeader {
-  margin: 1.5rem 0 1rem;
+/* ── Section ────────────────────────────────────────────────────────────── */
+.section { margin-bottom: 1.25rem; }
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  gap: .5rem;
 }
-.sectionHeader h3 { font-size: 1rem; font-weight: 700; }
+.sectionTitle {
+  font-size: .875rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  letter-spacing: -.015em;
+}
+.sectionMeta { font-size: .75rem; color: var(--text4); }
 
+/* ── Camera grid ────────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
-  gap: 1.1rem;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: .875rem;
 }
-
 .skeletonCard {
-  height: 300px;
-  border-radius: var(--radius);
   background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
   background-size: 200% 100%;
-  animation: skeleton 1.2s infinite;
+  animation: shimmer 1.6s ease infinite;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  aspect-ratio: 16/10;
 }
-@keyframes skeleton { to { background-position: -200% 0; } }
+@keyframes shimmer { to { background-position: -200% 0; } }
 
-@media(max-width: 900px) {
-  .statsRow { grid-template-columns: 1fr 1fr; }
-  .grid { grid-template-columns: 1fr; }
+.empty {
+  text-align: center;
+  color: var(--text4);
+  padding: 3rem 1rem;
+  font-size: .8125rem;
+  line-height: 1.7;
 }
-@media(max-width: 500px) {
-  .statsRow { grid-template-columns: 1fr; }
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 1024px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) {
+  .stats { grid-template-columns: repeat(2, 1fr); gap: .625rem; }
+  .grid  { grid-template-columns: 1fr; }
+  .date  { display: none; }
+  .statNum { font-size: 1.5rem; }
 }
+@media (max-width: 360px) { .stats { grid-template-columns: 1fr; } }
