@@ -2,19 +2,26 @@ import { useState, useRef, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { getStreamToken, setLineConfig } from '../api'
 import { Btn } from './UI'
+import styles from './LineConfigModal.module.css'
 
 /**
- * LineConfigModal — draw a virtual counting line on a live camera frame.
- * Click two points to define the line. Coordinates are normalised to 0–1.
+ * LineConfigModal — draw a virtual counting line on a camera snapshot.
+ *
+ * Uses GET /stream/{id}/snapshot (returns a static JPEG) instead of the
+ * MJPEG stream, so the browser can load it as a normal <img> and we can
+ * draw on top of it with a <canvas>.
+ *
+ * Click two points to define the line. Coordinates are normalised 0–1
+ * relative to the canvas intrinsic size (= image pixel size).
  */
 export default function LineConfigModal({ open, camera, onClose, onSaved }) {
   const canvasRef = useRef(null)
-  const bgRef     = useRef(null)   // stores the background HTMLImageElement
+  const bgRef     = useRef(null)   // background HTMLImageElement
   const [points,  setPoints]  = useState([])
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
 
-  // Reset state and fetch frame each time modal opens
+  // ── Load snapshot each time the modal opens ──────────────────────────────
   useEffect(() => {
     if (!open || !camera) return
     setError('')
@@ -28,7 +35,13 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
       .then(res => {
         if (cancelled) return
         const token = res.data.stream_token
-        const img   = new Image()
+
+        // Use the static JPEG snapshot endpoint — NOT the MJPEG stream.
+        // Browsers cannot load a multipart/x-mixed-replace stream as an img src.
+        const snapshotUrl =
+          `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
+
+        const img = new Image()
         img.crossOrigin = 'anonymous'
 
         img.onload = () => {
@@ -36,23 +49,21 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
           bgRef.current = img
           setLoading(false)
 
-          // Draw background immediately
           const canvas = canvasRef.current
           if (!canvas) return
-          canvas.width  = img.naturalWidth
-          canvas.height = img.naturalHeight
+          // Set canvas intrinsic size = image pixel size for 1:1 coordinate mapping
+          canvas.width  = img.naturalWidth  || 640
+          canvas.height = img.naturalHeight || 360
           canvas.getContext('2d').drawImage(img, 0, 0)
 
           // Restore existing line_config if any
           if (camera.line_config) {
             try {
               const lc = JSON.parse(camera.line_config)
-              // Convert normalised → display coords (canvas is CSS-scaled)
-              const dw = canvas.offsetWidth  || canvas.width
-              const dh = canvas.offsetHeight || canvas.height
+              // line_config stores normalised coords (0–1); convert to canvas px
               setPoints([
-                { x: lc.x1 * dw, y: lc.y1 * dh },
-                { x: lc.x2 * dw, y: lc.y2 * dh },
+                { x: lc.x1 * canvas.width,  y: lc.y1 * canvas.height },
+                { x: lc.x2 * canvas.width,  y: lc.y2 * canvas.height },
               ])
             } catch (_) { /* ignore malformed */ }
           }
@@ -61,12 +72,12 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
         img.onerror = () => {
           if (cancelled) return
           setLoading(false)
-          setError('Gagal memuat frame. Pastikan kamera aktif.')
+          setError(
+            'Frame belum tersedia. Pastikan kamera aktif dan sedang memproses video, lalu coba lagi.'
+          )
         }
 
-        img.src = `/api/v1/stream/${camera.id}/mjpeg?token=${encodeURIComponent(token)}`
-        // Abort after 5s if stream doesn't deliver a frame
-        setTimeout(() => { if (!img.complete) { img.src = ''; } }, 5000)
+        img.src = snapshotUrl
       })
       .catch(() => {
         if (!cancelled) {
@@ -78,7 +89,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
     return () => { cancelled = true }
   }, [open, camera?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Redraw overlay whenever points change
+  // ── Redraw overlay whenever points change ────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !bgRef.current) return
@@ -87,15 +98,12 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
     const W   = canvas.width
     const H   = canvas.height
 
-    // Restore background
+    // Redraw background
     ctx.drawImage(bgRef.current, 0, 0)
-
     if (points.length === 0) return
 
-    // Convert display-px → canvas-px
-    const sx = W / (canvas.offsetWidth  || W)
-    const sy = H / (canvas.offsetHeight || H)
-    const p  = points.map(pt => ({ x: pt.x * sx, y: pt.y * sy }))
+    // Points are already in canvas-px (intrinsic space)
+    const p = points
 
     // Point A
     ctx.beginPath()
@@ -108,7 +116,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
 
     if (p.length < 2) return
 
-    // Line
+    // Line A→B
     ctx.beginPath()
     ctx.moveTo(p[0].x, p[0].y)
     ctx.lineTo(p[1].x, p[1].y)
@@ -144,33 +152,41 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
     ctx.restore()
 
     // Labels
-    ctx.font      = `bold ${Math.max(12, W * 0.02)}px monospace`
+    ctx.font      = `bold ${Math.max(12, W * 0.022)}px monospace`
     ctx.fillStyle = '#38bdf8'
     ctx.fillText('A (IN)',  p[0].x + 12, p[0].y - 8)
     ctx.fillStyle = '#f472b6'
     ctx.fillText('B (OUT)', p[1].x + 12, p[1].y + 18)
   }, [points])
 
+  // ── Canvas click handler ─────────────────────────────────────────────────
   function handleCanvasClick(e) {
     const canvas = canvasRef.current
-    if (!canvas || loading) return
+    if (!canvas || loading || error) return
+
     const rect = canvas.getBoundingClientRect()
-    const x    = e.clientX - rect.left
-    const y    = e.clientY - rect.top
+    // Scale display-px → canvas intrinsic-px
+    const scaleX = canvas.width  / rect.width
+    const scaleY = canvas.height / rect.height
+    const x = (e.clientX - rect.left)  * scaleX
+    const y = (e.clientY - rect.top)   * scaleY
+
     setPoints(prev => prev.length >= 2 ? [{ x, y }] : [...prev, { x, y }])
   }
 
+  // ── Save mutation ────────────────────────────────────────────────────────
   const saveMut = useMutation({
     mutationFn: async () => {
       if (points.length !== 2) throw new Error('Tentukan dua titik terlebih dahulu')
       const canvas = canvasRef.current
-      const dw     = canvas?.offsetWidth  || 640
-      const dh     = canvas?.offsetHeight || 360
+      const W = canvas?.width  || 640
+      const H = canvas?.height || 360
+      // Normalise canvas-px → 0–1 using intrinsic canvas size
       await setLineConfig(camera.id, {
-        x1: points[0].x / dw,
-        y1: points[0].y / dh,
-        x2: points[1].x / dw,
-        y2: points[1].y / dh,
+        x1: points[0].x / W,
+        y1: points[0].y / H,
+        x2: points[1].x / W,
+        y2: points[1].y / H,
       })
     },
     onSuccess: () => onSaved(),
@@ -180,96 +196,111 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
   if (!open || !camera) return null
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0,
-      background: 'rgba(0,0,0,.78)',
-      zIndex: 200,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backdropFilter: 'blur(3px)',
-    }}>
-      <div style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 14,
-        padding: '1.5rem',
-        width: 'min(780px, 96vw)',
-        boxShadow: '0 25px 80px rgba(0,0,0,.6)',
-      }}>
+    <div className={styles.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className={styles.modal}>
         {/* Header */}
-        <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: '.5rem' }}>
-          Set Garis Virtual — {camera.name}
+        <div className={styles.header}>
+          <div className={styles.headerText}>
+            <div className={styles.title}>Set Garis Virtual — {camera.name}</div>
+            <p className={styles.subtitle}>
+              Klik titik <strong style={{ color: '#38bdf8' }}>A</strong> lalu titik{' '}
+              <strong style={{ color: '#f472b6' }}>B</strong> di atas frame untuk menentukan garis counting.
+              Orang yang menyeberangi dari sisi <strong>A ke B</strong> dihitung sebagai{' '}
+              <strong>masuk (IN)</strong>. Klik lagi untuk menggambar ulang.
+            </p>
+          </div>
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Tutup">✕</button>
         </div>
-        <p style={{ fontSize: '.82rem', color: 'var(--muted)', marginBottom: '.9rem', lineHeight: 1.5 }}>
-          Klik titik <strong style={{ color: '#38bdf8' }}>A</strong> lalu titik{' '}
-          <strong style={{ color: '#f472b6' }}>B</strong> di atas frame untuk menentukan garis counting.
-          Orang yang menyeberangi dari sisi A ke B dihitung sebagai <strong>masuk (IN)</strong>.
-          Klik lagi untuk menggambar ulang.
-        </p>
 
         {/* Canvas area */}
-        <div style={{
-          position: 'relative',
-          background: '#0f172a',
-          borderRadius: 8,
-          overflow: 'hidden',
-          marginBottom: '1rem',
-          minHeight: 220,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
+        <div className={styles.canvasWrap}>
           {loading && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--muted)', fontSize: '.85rem', zIndex: 2,
-              background: '#0f172a',
-            }}>
-              Memuat frame kamera...
+            <div className={styles.canvasLoader}>
+              <span className={styles.spinner} />
+              Memuat snapshot kamera...
             </div>
           )}
+
+          {!loading && error && (
+            <div className={styles.canvasError}>
+              <span className={styles.canvasErrorIcon}>&#128247;</span>
+              <span className={styles.canvasErrorMsg}>{error}</span>
+              <Btn size="sm" variant="outline" onClick={() => {
+                setError('')
+                setLoading(true)
+                // Retry by closing and reopening — trigger useEffect
+                bgRef.current = null
+                getStreamToken(camera.id)
+                  .then(res => {
+                    const token = res.data.stream_token
+                    const img = new Image()
+                    img.crossOrigin = 'anonymous'
+                    img.onload = () => {
+                      bgRef.current = img
+                      setLoading(false)
+                      const canvas = canvasRef.current
+                      if (!canvas) return
+                      canvas.width  = img.naturalWidth  || 640
+                      canvas.height = img.naturalHeight || 360
+                      canvas.getContext('2d').drawImage(img, 0, 0)
+                    }
+                    img.onerror = () => {
+                      setLoading(false)
+                      setError('Frame belum tersedia. Pastikan kamera aktif.')
+                    }
+                    img.src = `/api/v1/stream/${camera.id}/snapshot?token=${encodeURIComponent(token)}`
+                  })
+                  .catch(() => { setLoading(false); setError('Gagal mendapatkan token.') })
+              }}>
+                Coba Lagi
+              </Btn>
+            </div>
+          )}
+
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
-            style={{
-              display: 'block',
-              width: '100%',
-              height: 'auto',
-              cursor: 'crosshair',
-              borderRadius: 8,
-              opacity: loading ? 0 : 1,
-            }}
+            className={(!loading && !error) ? styles.canvas : styles.canvasHidden}
           />
         </div>
 
         {/* Status */}
-        <div style={{ fontSize: '.8rem', color: 'var(--muted)', marginBottom: '.5rem' }}>
-          {points.length === 0 && 'Klik pada frame untuk menentukan titik A (IN)'}
-          {points.length === 1 && 'Klik lagi untuk menentukan titik B (OUT)'}
-          {points.length === 2 && (
-            <span style={{ color: '#4ade80' }}>
-              Garis siap — klik "Simpan" atau klik frame untuk menggambar ulang
+        {!error && (
+          <div className={`${styles.status} ${
+            points.length === 0 ? styles.statusWaiting :
+            points.length === 1 ? styles.statusProgress :
+            styles.statusReady
+          }`}>
+            <span className={styles.statusDot} />
+            <span className={styles.statusText}>
+              {points.length === 0 && !loading && 'Klik pada frame untuk menentukan titik A (IN)'}
+              {points.length === 1 && 'Klik lagi untuk menentukan titik B (OUT)'}
+              {points.length === 2 && (
+                <span className={styles.statusReadyText}>
+                  Garis siap — klik "Simpan" atau klik frame untuk menggambar ulang
+                </span>
+              )}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
-        {error && (
-          <div style={{ color: 'var(--danger)', fontSize: '.82rem', marginBottom: '.75rem' }}>
-            {error}
+        {saveMut.isError && (
+          <div className={styles.saveError}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+              <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M6 4v2.5M6 8h.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+            {typeof saveMut.error === 'string' ? saveMut.error : 'Gagal menyimpan garis'}
           </div>
         )}
 
         {/* Footer */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '.6rem' }}>
-          <Btn variant="outline" onClick={() => { setPoints([]); setError('') }}>
-            Reset
-          </Btn>
-          <Btn variant="outline" onClick={onClose}>
-            Batal
-          </Btn>
+        <div className={styles.footer}>
+          <Btn variant="outline" onClick={() => setPoints([])}>Reset</Btn>
+          <Btn variant="outline" onClick={onClose}>Batal</Btn>
           <Btn
             variant="primary"
-            disabled={points.length !== 2}
+            disabled={points.length !== 2 || !!error}
             loading={saveMut.isPending}
             onClick={() => saveMut.mutate()}
           >
