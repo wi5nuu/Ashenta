@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation } from '@tanstack/react-query'
 import { getStreamToken, setLineConfig } from '../api'
 import { Btn } from './UI'
@@ -247,7 +248,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
 
   if (!open || !camera) return null
 
-  return (
+  return createPortal(
     <div className={styles.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div className={styles.modal}>
         {/* Header */}
@@ -324,6 +325,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
           </Btn>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
