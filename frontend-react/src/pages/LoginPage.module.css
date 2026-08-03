@@ -1,0 +1,20 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem;
+  width: 380px;
+  max-width: 96vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,.4);
+}
+.title { font-size: 1.6rem; color: var(--accent); margin-bottom: .25rem; font-weight: 800; }
+.sub   { color: var(--muted); font-size: .875rem; margin-bottom: 2rem; }
+.error { color: var(--danger); font-size: .82rem; margin-bottom: .75rem; }
+.fullBtn { width: 100%; margin-top: .25rem; }

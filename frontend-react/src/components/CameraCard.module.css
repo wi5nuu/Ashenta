@@ -1,0 +1,75 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .85rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.title {
+  font-weight: 700;
+  font-size: .9rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.counter {
+  display: flex;
+  gap: .75rem;
+  font-size: .78rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+.counter strong { color: var(--text); font-weight: 700; }
+
+.video {
+  position: relative;
+  background: #000;
+  aspect-ratio: 16/9;
+  overflow: hidden;
+}
+.video img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .6rem;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.icon { font-size: 2rem; opacity: .4; }
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .7rem 1rem;
+  border-top: 1px solid var(--border);
+}
+.location {
+  font-size: .75rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}

@@ -1,0 +1,76 @@
+# ─── Secrets & Environment ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.dmypy.json
+.pyre/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ─── Database ────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+*.err
+logs/
+server.log
+server.err
+
+# ─── ML Models ───────────────────────────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.weights
+*.h5
+
+# ─── Build / Frontend dist ───────────────────────────────────────────────────
+frontend-dist/
+frontend-react/dist/
+frontend-react/dist-ssr/
+frontend-react/node_modules/
+
+# ─── Uploads (runtime files) ─────────────────────────────────────────────────
+uploads/*
+!uploads/.gitkeep
+
+# ─── OS & Editor ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ─── Docker volumes / runtime ────────────────────────────────────────────────
+pgdata/

@@ -1,0 +1,31 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.header h2 { font-size: 1.1rem; font-weight: 700; }
+
+.empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 2.5rem 1rem;
+  font-size: .875rem;
+}
+
+.actions {
+  display: flex;
+  gap: .4rem;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: .72rem;
+  background: rgba(129,140,248,.1);
+  color: var(--accent2);
+  border: 1px solid rgba(129,140,248,.2);
+  padding: .15rem .5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}

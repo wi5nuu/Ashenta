@@ -1,0 +1,36 @@
+.page { max-width: 640px; }
+
+.title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 1.25rem;
+}
+
+.section { margin-bottom: 1.25rem; }
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .75rem;
+}
+
+.form { display: flex; flex-direction: column; gap: .75rem; }
+
+.ok  { color: var(--success); font-size: .82rem; }
+.err { color: var(--danger);  font-size: .82rem; }
+
+.muted { color: var(--muted); font-size: .875rem; padding: 1rem 0; }
+
+.role {
+  font-size: .72rem;
+  background: rgba(56,189,248,.08);
+  color: var(--accent);
+  border: 1px solid rgba(56,189,248,.15);
+  padding: .15rem .5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.you { color: var(--muted); font-size: .8rem; font-weight: 400; }
