@@ -80,11 +80,7 @@ export default function CameraCard({
     <div className={`${styles.card} ${isError ? styles.cardError : ''} ${isActive ? styles.cardActive : ''}`}>
 
       {/* ── Video area ───────────────────────────────────────────────────── */}
-      <div
-        className={styles.video}
-        onClick={!streaming && isActive && !streamErr ? startStream : streaming ? stopStream : undefined}
-        style={{ cursor: (!streaming && isActive && !streamErr) || streaming ? 'pointer' : 'default' }}
-      >
+      <div className={styles.video}>
         <img
           ref={imgRef}
           className={styles.img}
@@ -108,7 +104,11 @@ export default function CameraCard({
 
         {/* Overlay when not streaming */}
         {!streaming && (
-          <div className={styles.videoOverlay}>
+          <div
+            className={styles.videoOverlay}
+            onClick={isActive && !streamErr ? startStream : undefined}
+            style={{ cursor: isActive && !streamErr ? 'pointer' : 'default' }}
+          >
             <div className={`${styles.overlayIconWrap} ${isError ? styles.overlayIconWrapError : ''}`}>
               {streamErr ? (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className={styles.overlayIconError}>
