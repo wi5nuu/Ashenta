@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuthStore, useWsStore } from '../store'
+import { useQuery } from '@tanstack/react-query'
+import { getMe } from '../api'
 import styles from './Layout.module.css'
 
 const NAV = [
@@ -37,6 +39,16 @@ const NAV = [
     ),
   },
   {
+    to: '/alerts',
+    label: 'Notifikasi',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+        <path d="M8 1a5 5 0 0 1 5 5v2.5l1 1.5H2l1-1.5V6a5 5 0 0 1 5-5Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round"/>
+        <path d="M6.5 13a1.5 1.5 0 0 0 3 0" stroke="currentColor" strokeWidth="1.25"/>
+      </svg>
+    ),
+  },
+  {
     to: '/settings',
     label: 'Pengaturan',
     icon: (
@@ -61,6 +73,13 @@ export default function Layout() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
 
+  // Load user profile
+  const { data: me } = useQuery({
+    queryKey: ['me'],
+    queryFn: () => getMe().then(r => r.data),
+    staleTime: 300_000,
+  })
+
   function handleLogout() { logout(); navigate('/login') }
 
   function toggleSidebar(val) {
@@ -74,9 +93,8 @@ export default function Layout() {
       key={n.to}
       to={n.to}
       end={n.to === '/'}
-      onClick={() => toggleSidebar(false)}
       className={({ isActive }) => `${styles.navItem}${isActive ? ' ' + styles.active : ''}`}
-      onClick={() => setOpen(false)}
+      onClick={() => toggleSidebar(false)}
     >
       <span className={styles.navIcon}>{n.icon}</span>
       {n.label}
@@ -102,6 +120,18 @@ export default function Layout() {
         </nav>
 
         <div className={styles.sidebarFooter}>
+          {/* User profile */}
+          {me && (
+            <div className={styles.userRow}>
+              <div className={styles.userAvatar}>
+                {(me.username || me.email || '?')[0].toUpperCase()}
+              </div>
+              <div className={styles.userInfo}>
+                <span className={styles.userName}>{me.username || me.email}</span>
+                <span className={styles.userRole}>{me.role === 'admin' ? 'Admin' : 'Viewer'}</span>
+              </div>
+            </div>
+          )}
           <div className={`${styles.wsRow} ${styles[wsStatus] || ''}`}>
             <span className={styles.wsDot} />
             <span className={styles.wsLabel}>{WS_LABEL[wsStatus] || wsStatus}</span>

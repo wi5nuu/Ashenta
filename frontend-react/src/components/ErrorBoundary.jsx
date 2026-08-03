@@ -67,7 +67,7 @@ export default class ErrorBoundary extends React.Component {
             </pre>
           )}
           <button
-            onClick={() => this.setState({ error: null, errorId: null })}
+            onClick={() => window.location.reload()}
             style={{
               background: 'linear-gradient(135deg, #4d8fff, #7c5cfc)',
               color: '#fff', border: 'none',

@@ -397,7 +397,7 @@ export default function LineConfigModal({ open, camera, onClose, onSaved }) {
               <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
               <path d="M6 4v2.5M6 8h.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
             </svg>
-            {saveMut.error?.message || 'Gagal menyimpan garis'}
+            {saveMut.error || 'Gagal menyimpan garis'}
           </div>
         )}
 

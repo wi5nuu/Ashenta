@@ -34,6 +34,7 @@ export default function CameraCard({
   onRestart,
   startLoading,
   stopLoading,
+  restartLoading,
   onDetail,
 }) {
   const [streaming,   setStreaming]   = useState(false)
@@ -312,14 +313,18 @@ export default function CameraCard({
         {isError ? (
           <button
             className={`${styles.actionBtn} ${styles.actionBtnWarn}`}
-            onClick={() => { onStop?.(camera.id); setTimeout(() => onStart?.(camera.id), 500) }}
-            disabled={startLoading || stopLoading}
+            onClick={() => onRestart?.(camera.id)}
+            disabled={restartLoading}
             title="Restart — stop lalu start ulang kamera"
           >
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
-              <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-              <path d="M8 1v4l2.5-2L8 1Z" fill="currentColor"/>
-            </svg>
+            {restartLoading ? (
+              <span className={styles.spinner} />
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+                <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                <path d="M8 1v4l2.5-2L8 1Z" fill="currentColor"/>
+              </svg>
+            )}
             Restart
           </button>
         ) : isActive ? (

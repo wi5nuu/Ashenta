@@ -7,6 +7,8 @@ import DashboardPage from './pages/DashboardPage'
 import CamerasPage from './pages/CamerasPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import SettingsPage from './pages/SettingsPage'
+import AlertsPage from './pages/AlertsPage'
+import ToastContainer from './components/Toast'
 
 function PrivateRoute({ children }) {
   const token = useAuthStore(s => s.token)
@@ -17,15 +19,19 @@ function AppRoutes() {
   const token = useAuthStore(s => s.token)
   useWebSocket()
   return (
-    <Routes>
-      <Route path="/login" element={token ? <Navigate to="/" replace /> : <LoginPage />} />
-      <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
-        <Route index element={<DashboardPage />} />
-        <Route path="cameras" element={<CamerasPage />} />
-        <Route path="analytics" element={<AnalyticsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-      </Route>
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/login" element={token ? <Navigate to="/" replace /> : <LoginPage />} />
+        <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
+          <Route index element={<DashboardPage />} />
+          <Route path="cameras" element={<CamerasPage />} />
+          <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="alerts" element={<AlertsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+        </Route>
+      </Routes>
+      <ToastContainer />
+    </>
   )
 }
 
