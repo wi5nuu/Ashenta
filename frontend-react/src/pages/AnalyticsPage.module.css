@@ -3,17 +3,17 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 .header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  margin-bottom: 1.75rem;
+  margin-bottom: 2rem;
   flex-wrap: wrap;
   gap: 1rem;
 }
 .title {
-  font-size: 1.125rem;
+  font-size: 1.25rem;
   font-weight: 650;
   color: var(--text);
-  letter-spacing: -.025em;
+  letter-spacing: -.03em;
 }
 .sub {
   font-size: .8rem;
@@ -98,6 +98,49 @@
   font-size: .8125rem;
   line-height: 1.7;
 }
+
+/* ── Heatmap ─────────────────────────────────────────────────────────────── */
+.heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: .25rem;
+}
+.hmHours {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.hmCorner { width: 28px; flex-shrink: 0; }
+.hmHourLabel {
+  flex: 2;
+  font-size: .55rem;
+  color: var(--text4);
+  text-align: center;
+  letter-spacing: -.01em;
+}
+.hmRow {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.hmDayLabel {
+  width: 28px;
+  flex-shrink: 0;
+  font-size: .65rem;
+  color: var(--text4);
+  letter-spacing: .02em;
+}
+.hmCell {
+  flex: 1;
+  height: 18px;
+  border-radius: 3px;
+  min-width: 10px;
+  transition: opacity .15s;
+  cursor: default;
+}
+.hmCell:hover { opacity: .75; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {

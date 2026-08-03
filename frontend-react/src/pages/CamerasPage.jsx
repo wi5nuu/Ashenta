@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getCameras, deleteCamera, startCamera, stopCamera } from '../api'
 import { Btn, Modal } from '../components/UI'
 import { useWsStore } from '../store'
+import { useToast } from '../hooks/useToast'
 import CameraCard from '../components/CameraCard'
 import CameraDetailModal from '../components/CameraDetailModal'
 import AddCameraModal from '../components/AddCameraModal'
@@ -18,12 +19,14 @@ const FILTERS = [
 
 export default function CamerasPage() {
   const qc = useQueryClient()
+  const toast = useToast()
   const [showAdd,   setShowAdd]   = useState(false)
   const [editCam,   setEditCam]   = useState(null)
   const [confirmId, setConfirmId] = useState(null)
   const [lineCam,   setLineCam]   = useState(null)
   const [detailId,  setDetailId]  = useState(null)
   const [filter,    setFilter]    = useState('all')
+  const [search,    setSearch]    = useState('')
 
   const wsCounters = useWsStore(s => s.counters)
   const wsStatuses = useWsStore(s => s.cameraStatuses)
@@ -36,15 +39,39 @@ export default function CamerasPage() {
 
   const startMut = useMutation({
     mutationFn: (id) => startCamera(id),
-    onSuccess:  ()   => qc.invalidateQueries({ queryKey: ['cameras'] }),
+    onSuccess:  (_, id) => {
+      qc.invalidateQueries({ queryKey: ['cameras'] })
+      toast.success('Kamera berhasil dijalankan')
+    },
+    onError: (e) => toast.error(`Gagal menjalankan kamera: ${e}`),
   })
   const stopMut = useMutation({
     mutationFn: (id) => stopCamera(id),
-    onSuccess:  ()   => qc.invalidateQueries({ queryKey: ['cameras'] }),
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['cameras'] })
+      toast.info('Kamera dihentikan')
+    },
+    onError: (e) => toast.error(`Gagal menghentikan kamera: ${e}`),
+  })
+  const restartMut = useMutation({
+    mutationFn: async (id) => {
+      await stopCamera(id)
+      await startCamera(id)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cameras'] })
+      toast.success('Kamera berhasil direstart')
+    },
+    onError: (e) => toast.error(`Gagal restart kamera: ${e}`),
   })
   const deleteMut = useMutation({
     mutationFn: (id) => deleteCamera(id),
-    onSuccess:  ()   => { qc.invalidateQueries({ queryKey: ['cameras'] }); setConfirmId(null) },
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['cameras'] })
+      setConfirmId(null)
+      toast.success('Kamera berhasil dihapus')
+    },
+    onError: (e) => toast.error(`Gagal menghapus kamera: ${e}`),
   })
 
   // Merge WS statuses — WS always freshest
@@ -59,10 +86,17 @@ export default function CamerasPage() {
   const inactiveCams = mergedCameras.filter(c => c.status !== 'active' && c.status !== 'error').length
   const confirmCam   = cameras.find(c => c.id === confirmId)
 
-  // Filtered list
-  const filteredCameras = filter === 'all'
-    ? mergedCameras
-    : mergedCameras.filter(c => c.status === filter)
+  // Filtered + searched list
+  const filteredCameras = mergedCameras
+    .filter(c => filter === 'all' || c.status === filter)
+    .filter(c => {
+      if (!search.trim()) return true
+      const q = search.toLowerCase()
+      return (
+        c.name?.toLowerCase().includes(q) ||
+        c.location_label?.toLowerCase().includes(q)
+      )
+    })
 
   // Bulk actions
   function startAll() {
@@ -126,6 +160,31 @@ export default function CamerasPage() {
           </Btn>
         </div>
       </div>
+
+      {/* ── Search bar ────────────────────────────────────────────────────── */}
+      {!isLoading && cameras.length > 0 && (
+        <div className={styles.searchWrap}>
+          <span className={styles.searchIcon}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.25"/>
+              <path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round"/>
+            </svg>
+          </span>
+          <input
+            className={styles.searchInput}
+            placeholder="Cari nama atau lokasi kamera..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && (
+            <button className={styles.searchClear} onClick={() => setSearch('')} aria-label="Hapus pencarian">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Stats bar ─────────────────────────────────────────────────────── */}
       {!isLoading && cameras.length > 0 && (
@@ -221,8 +280,10 @@ export default function CamerasPage() {
               onLineConfig={(c) => setLineCam(c)}
               onStart={(id)     => startMut.mutate(id)}
               onStop={(id)      => stopMut.mutate(id)}
-              startLoading={startMut.isPending && startMut.variables === cam.id}
-              stopLoading={stopMut.isPending  && stopMut.variables  === cam.id}
+              onRestart={(id)   => restartMut.mutate(id)}
+              startLoading={startMut.isPending   && startMut.variables   === cam.id}
+              stopLoading={stopMut.isPending     && stopMut.variables    === cam.id}
+              restartLoading={restartMut.isPending && restartMut.variables === cam.id}
             />
           ))}
         </div>

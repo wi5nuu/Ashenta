@@ -6,7 +6,8 @@ import CameraCard from '../components/CameraCard'
 import styles from './DashboardPage.module.css'
 
 export default function DashboardPage() {
-  const counters = useWsStore(s => s.counters)
+  const counters   = useWsStore(s => s.counters)
+  const wsStatuses = useWsStore(s => s.cameraStatuses)
 
   const { data: cameras = [], isLoading: camLoading } = useQuery({
     queryKey: ['cameras'],
@@ -32,7 +33,6 @@ export default function DashboardPage() {
   const net        = totalIn - totalOut
 
   // Merge WS statuses ke camera list
-  const wsStatuses = useWsStore(s => s.cameraStatuses)
   const activeCams = cameras.filter(c => (wsStatuses[c.id] ?? c.status) === 'active').length
 
   const dateStr = new Date().toLocaleDateString('id-ID', {

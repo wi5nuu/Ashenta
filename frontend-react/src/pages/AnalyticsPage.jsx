@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getCameras, getHourly, getDaily, getPredictive } from '../api'
+import { getCameras, getHourly, getDaily, getPredictive, getTrend, getHeatmap } from '../api'
 import { Card, CardTitle, Skeleton } from '../components/UI'
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
@@ -10,16 +10,26 @@ import styles from './AnalyticsPage.module.css'
 
 const TT = {
   contentStyle: {
-    background: '#161618',
-    border: '1px solid rgba(255,255,255,0.08)',
+    background: 'var(--surface2)',
+    border: '1px solid var(--border2)',
     borderRadius: '8px',
     fontSize: '12px',
     boxShadow: '0 8px 24px rgba(0,0,0,.5)',
     padding: '8px 12px',
   },
-  labelStyle:   { color: '#71717a', fontWeight: 600, marginBottom: 4, fontSize: 11 },
-  itemStyle:    { color: '#a1a1aa' },
+  labelStyle:   { color: 'var(--text3)', fontWeight: 600, marginBottom: 4, fontSize: 11 },
+  itemStyle:    { color: 'var(--text2)' },
   cursor:       { fill: 'rgba(255,255,255,.03)' },
+}
+
+const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
+const HOURS   = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2,'0')}:00`)
+
+// Heatmap cell intensity → colour
+function heatColor(val, max) {
+  if (!max || !val) return 'var(--surface3)'
+  const t = Math.min(val / max, 1)
+  return `rgba(77,143,255,${(0.08 + t * 0.72).toFixed(2)})`
 }
 
 export default function AnalyticsPage() {
@@ -31,14 +41,13 @@ export default function AnalyticsPage() {
     queryKey: ['cameras'],
     queryFn: () => getCameras().then(r => r.data),
   })
-  const params = { date, ...(camId ? { camera_id: camId } : {}) }
-
-  const isToday = date === today
+  const params   = { date, ...(camId ? { camera_id: camId } : {}) }
+  const isToday  = date === today
 
   const { data: hourlyResp, isLoading: hLoad } = useQuery({
     queryKey: ['hourly', params],
     queryFn: () => getHourly(params).then(r => r.data),
-    refetchInterval: isToday ? 60_000 : false, // refresh tiap 1 menit jika hari ini
+    refetchInterval: isToday ? 60_000 : false,
   })
   const { data: daily, isLoading: dLoad } = useQuery({
     queryKey: ['daily', params],
@@ -49,10 +58,23 @@ export default function AnalyticsPage() {
     queryKey: ['predictive', { camera_id: camId }],
     queryFn: () => getPredictive(camId ? { camera_id: camId } : {}).then(r => r.data),
     staleTime: 300_000,
-    refetchInterval: isToday ? 300_000 : false, // refresh tiap 5 menit jika hari ini
+    refetchInterval: isToday ? 300_000 : false,
+  })
+  const { data: trendResp = [], isLoading: tLoad } = useQuery({
+    queryKey: ['trend', { camera_id: camId }],
+    queryFn: () => getTrend(camId ? { camera_id: camId } : {}).then(r => r.data),
+    staleTime: 300_000,
+  })
+  const { data: heatmapResp = [], isLoading: hmLoad } = useQuery({
+    queryKey: ['heatmap', { camera_id: camId }],
+    queryFn: () => getHeatmap(camId ? { camera_id: camId } : {}).then(r => r.data),
+    staleTime: 300_000,
   })
 
-  const hourly = Array.isArray(hourlyResp) ? hourlyResp : (hourlyResp?.data ?? [])
+  const hourly     = Array.isArray(hourlyResp) ? hourlyResp : (hourlyResp?.data ?? [])
+  const trendData  = Array.isArray(trendResp)  ? trendResp  : (trendResp?.data  ?? [])
+  const heatmapRaw = Array.isArray(heatmapResp) ? heatmapResp : (heatmapResp?.data ?? [])
+
   const hourlyFmt = hourly.map(h => ({
     hour:   `${String(h.hour).padStart(2,'0')}:00`,
     Masuk:  h.entries || 0,
@@ -64,7 +86,18 @@ export default function AnalyticsPage() {
     Masuk:  p.predicted_entries || 0,
     Keluar: p.predicted_exits   || 0,
   }))
-  const peak = hourlyFmt.reduce((mx, h) => h.Masuk > (mx?.Masuk||0) ? h : mx, null)
+  const trendFmt = trendData.map(t => ({
+    date:   t.date ? t.date.slice(5) : '',
+    Masuk:  t.entries || 0,
+    Keluar: t.exits   || 0,
+  }))
+
+  // Build heatmap grid: day × hour
+  const hmMax = heatmapRaw.reduce((m, r) => Math.max(m, r.count || 0), 0)
+  const hmGrid = {} // { "day-hour": count }
+  heatmapRaw.forEach(r => { hmGrid[`${r.day_of_week}-${r.hour}`] = r.count || 0 })
+
+  const peak = hourlyFmt.reduce((mx, h) => h.Masuk > (mx?.Masuk || 0) ? h : mx, null)
 
   const axisProps = {
     tick:     { fill: '#52525b', fontSize: 11 },
@@ -86,8 +119,7 @@ export default function AnalyticsPage() {
       <div className={styles.filters}>
         <div className={styles.filterItem}>
           <label>Tanggal</label>
-          <input type="date" value={date} max={today}
-            onChange={e => setDate(e.target.value)} />
+          <input type="date" value={date} max={today} onChange={e => setDate(e.target.value)} />
         </div>
         <div className={styles.filterItem}>
           <label>Kamera</label>
@@ -164,23 +196,79 @@ export default function AnalyticsPage() {
               <XAxis dataKey="hour" {...axisProps} />
               <YAxis {...axisProps} />
               <Tooltip {...TT} />
-              <Area type="monotone" dataKey="Bersih" stroke="#ededed" strokeWidth={1.5}
-                fill="url(#netG)" dot={false} />
+              <Area type="monotone" dataKey="Bersih" stroke="#ededed" strokeWidth={1.5} fill="url(#netG)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </Card>
 
-      {/* Predictive */}
+      {/* Trend 7 hari */}
+      <Card style={{ marginBottom: '.75rem' }}>
+        <div className={styles.chartHead}>
+          <div className={styles.chartTitle}>Tren 7 Hari Terakhir</div>
+          <div className={styles.chartSub}>masuk vs keluar per hari</div>
+        </div>
+        {tLoad ? <Skeleton height={180} /> : trendFmt.length === 0 ? (
+          <div className={styles.empty}>Belum ada data tren. Dibutuhkan minimal 2 hari data.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={trendFmt} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="1 4" stroke="rgba(255,255,255,.04)" vertical={false} />
+              <XAxis dataKey="date" {...axisProps} />
+              <YAxis {...axisProps} />
+              <Tooltip {...TT} />
+              <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
+              <Line type="monotone" dataKey="Masuk"  stroke="#4d8fff" strokeWidth={1.5} dot={{ r: 3, fill: '#4d8fff' }} />
+              <Line type="monotone" dataKey="Keluar" stroke="#7c5cfc" strokeWidth={1.5} dot={{ r: 3, fill: '#7c5cfc' }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+
+      {/* Heatmap */}
+      <Card style={{ marginBottom: '.75rem' }}>
+        <div className={styles.chartHead}>
+          <div className={styles.chartTitle}>Heatmap Keramaian</div>
+          <div className={styles.chartSub}>hari × jam — intensitas pengunjung masuk</div>
+        </div>
+        {hmLoad ? <Skeleton height={160} /> : heatmapRaw.length === 0 ? (
+          <div className={styles.empty}>Belum ada data heatmap.</div>
+        ) : (
+          <div className={styles.heatmap}>
+            <div className={styles.hmHours}>
+              <div className={styles.hmCorner} />
+              {HOURS.filter((_, i) => i % 2 === 0).map(h => (
+                <div key={h} className={styles.hmHourLabel}>{h}</div>
+              ))}
+            </div>
+            {DAYS_ID.map((day, di) => (
+              <div key={day} className={styles.hmRow}>
+                <div className={styles.hmDayLabel}>{day}</div>
+                {Array.from({ length: 24 }, (_, hi) => {
+                  const val = hmGrid[`${di}-${hi}`] || 0
+                  return (
+                    <div
+                      key={hi}
+                      className={styles.hmCell}
+                      style={{ background: heatColor(val, hmMax) }}
+                      title={`${day} ${String(hi).padStart(2,'0')}:00 — ${val} masuk`}
+                    />
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Prediksi */}
       <Card>
         <div className={styles.chartHead}>
           <div className={styles.chartTitle}>Prediksi Besok</div>
           <div className={styles.chartSub}>berdasarkan data historis 7 hari</div>
         </div>
         {pLoad ? <Skeleton height={180} /> : predFmt.length === 0 ? (
-          <div className={styles.empty}>
-            Dibutuhkan minimal 7 hari data historis untuk prediksi.
-          </div>
+          <div className={styles.empty}>Dibutuhkan minimal 7 hari data historis untuk prediksi.</div>
         ) : (
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={predFmt} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -189,10 +277,8 @@ export default function AnalyticsPage() {
               <YAxis {...axisProps} />
               <Tooltip {...TT} />
               <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
-              <Line type="monotone" dataKey="Masuk"  stroke="#ededed" strokeWidth={1.5}
-                dot={false} strokeDasharray="4 2" />
-              <Line type="monotone" dataKey="Keluar" stroke="#52525b" strokeWidth={1.5}
-                dot={false} strokeDasharray="4 2" />
+              <Line type="monotone" dataKey="Masuk"  stroke="#ededed" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              <Line type="monotone" dataKey="Keluar" stroke="#52525b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
             </LineChart>
           </ResponsiveContainer>
         )}
