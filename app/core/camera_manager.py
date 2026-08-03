@@ -111,6 +111,7 @@ class CameraManager:
         worker = self._workers.pop(camera_id, None)
         if worker:
             worker.stop()
+            self._broker.clear_camera(camera_id)
 
     def reload_line(self, camera_id: int, line_config_json: str) -> bool:
         worker = self._workers.get(camera_id)

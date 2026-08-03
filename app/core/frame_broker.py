@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 import threading
-from typing import Dict, List, AsyncIterator
+from typing import Dict, List, AsyncIterator, Optional
 import cv2
 import numpy as np
 
@@ -12,23 +12,24 @@ logger = get_logger(__name__)
 
 _JPEG_QUALITY = 70
 _BOUNDARY_PREFIX = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+_FRAME_TIMEOUT   = 10.0   # seconds to wait for next frame before giving up
 
 
 class FrameBroker:
     """
     Thread-safe MJPEG frame broker.
 
-    Improvements:
-    - Correct Content-Length in each MJPEG part header so browsers can decode
-      frames without buffering ambiguity.
-    - Queue per subscriber (not per camera) prevents one slow client from
-      affecting others.
+    - Correct Content-Length in each MJPEG part header.
+    - Queue per subscriber — one slow client doesn't affect others.
+    - Latest raw JPEG stored per camera for snapshot endpoint.
+    - Frames iterator has a timeout so MJPEG connections close when camera stops.
     """
 
     def __init__(self) -> None:
-        self._queues: Dict[int, List[asyncio.Queue]] = {}
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._lock = threading.Lock()
+        self._queues:       Dict[int, List[asyncio.Queue]] = {}
+        self._latest_jpeg:  Dict[int, bytes]               = {}
+        self._loop:  asyncio.AbstractEventLoop | None      = None
+        self._lock   = threading.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -41,6 +42,11 @@ class FrameBroker:
         if not ok:
             return
         jpeg_bytes = buf.tobytes()
+
+        # Store latest JPEG for snapshot
+        with self._lock:
+            self._latest_jpeg[camera_id] = jpeg_bytes
+
         # Build full multipart chunk once, reuse for all subscribers
         chunk = (
             _BOUNDARY_PREFIX
@@ -62,6 +68,16 @@ class FrameBroker:
             except asyncio.QueueFull:
                 pass  # drop frame for slow client
 
+    def get_latest_jpeg(self, camera_id: int) -> Optional[bytes]:
+        """Return the most-recent JPEG frame for this camera, or None."""
+        with self._lock:
+            return self._latest_jpeg.get(camera_id)
+
+    def clear_camera(self, camera_id: int) -> None:
+        """Remove stored frame when camera stops."""
+        with self._lock:
+            self._latest_jpeg.pop(camera_id, None)
+
     def subscribe(self, camera_id: int) -> "_FrameSubscription":
         return _FrameSubscription(self, camera_id)
 
@@ -80,7 +96,7 @@ class FrameBroker:
 
 class _FrameSubscription:
     def __init__(self, broker: FrameBroker, camera_id: int) -> None:
-        self._broker = broker
+        self._broker    = broker
         self._camera_id = camera_id
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=4)
 
@@ -92,9 +108,16 @@ class _FrameSubscription:
         self._broker._remove_queue(self._camera_id, self._queue)
 
     async def frames(self) -> AsyncIterator[bytes]:
+        """Yield MJPEG chunks. Stops automatically if no frame arrives within timeout."""
         while True:
-            chunk = await self._queue.get()
-            yield chunk
+            try:
+                chunk = await asyncio.wait_for(
+                    self._queue.get(), timeout=_FRAME_TIMEOUT
+                )
+                yield chunk
+            except asyncio.TimeoutError:
+                # Camera stopped sending — close the stream cleanly
+                return
 
 
 _frame_broker: FrameBroker | None = None

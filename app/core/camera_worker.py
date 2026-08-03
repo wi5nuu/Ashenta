@@ -1,4 +1,4 @@
-"""CameraWorker — low-latency RTSP/HTTP/YouTube/video, per-frame counter publish, thread-safe line reload."""
+"""CameraWorker — low-latency RTSP/HTTP/video capture, per-frame counter publish, thread-safe line reload."""
 from __future__ import annotations
 import json
 import threading
@@ -21,54 +21,11 @@ from app.security import decrypt_credential
 logger = get_logger(__name__)
 
 _RECONNECT_DELAY_MIN = 2    # seconds
-_RECONNECT_DELAY_MAX = 30
+_RECONNECT_DELAY_MAX = 60
 _RECONNECT_BACKOFF   = 1.5
 
-# URL patterns that need yt-dlp resolution
-_YTDLP_DOMAINS = (
-    "youtube.com", "youtu.be", "twitch.tv", "facebook.com",
-    "instagram.com", "tiktok.com", "dailymotion.com", "vimeo.com",
-    "twitter.com", "x.com",
-)
-
-
-def _resolve_stream_url(url: str) -> str:
-    """
-    Resolve a web video URL (YouTube, Twitch, etc.) to a direct stream URL
-    using yt-dlp. Returns the original URL if it doesn't match known platforms.
-    """
-    lower = url.lower()
-    if not any(domain in lower for domain in _YTDLP_DOMAINS):
-        return url  # RTSP, HTTP MJPEG, file path — use as-is
-
-    try:
-        import yt_dlp
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            # Prefer a format with both video+audio in a single file,
-            # avoid DASH/HLS manifests that OpenCV cannot handle.
-            # bestvideo[ext=mp4]+bestaudio falls back gracefully.
-            "format": "best[ext=mp4][protocol=https]/best[ext=mp4]/best[protocol=https]/best",
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # For playlists, take first entry
-            if "entries" in info:
-                info = info["entries"][0]
-            # Prefer a single direct URL over a manifest
-            direct_url = info.get("url")
-            if not direct_url:
-                # Fall back to manifest URL (HLS/DASH) — OpenCV may handle it
-                direct_url = info.get("manifest_url")
-            if not direct_url:
-                raise RuntimeError("yt-dlp could not extract stream URL")
-            logger.info("Resolved stream URL via yt-dlp",
-                        original=url, resolved=direct_url[:80])
-            return direct_url
-    except Exception as exc:
-        logger.error("yt-dlp resolve failed", url=url, error=str(exc))
-        raise RuntimeError(f"Cannot resolve stream URL: {exc}") from exc
+# Supported source types: rtsp, rtmp, http (MJPEG/HLS), file path
+# YouTube/social media URLs are NOT supported — use a real IP camera or RTSP stream.
 
 
 def _draw_overlay(
@@ -83,34 +40,74 @@ def _draw_overlay(
 
     for det in detections:
         x1, y1, x2, y2 = int(det.x1), int(det.y1), int(det.x2), int(det.y2)
+        # Green bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # Foot point marker for debugging line crossing
+        fx, fy = int((x1 + x2) / 2), y2
+        cv2.circle(frame, (fx, fy), 3, (0, 255, 255), -1)
         label = f"ID:{det.track_id} {det.confidence:.2f}"
         cv2.putText(frame, label, (x1, max(y1 - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
     if line is not None:
         pt1, pt2 = line.to_pixel(w, h)
+        # Red counting line with directional arrows
         cv2.line(frame, pt1, pt2, (0, 0, 255), 2)
+        # Label the line ends
+        cv2.putText(frame, "IN", (pt1[0] + 4, pt1[1] - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
 
     net = count_in - count_out
-    cv2.rectangle(frame, (0, 0), (280, 62), (0, 0, 0), -1)
-    cv2.putText(frame, f"{camera_name}", (6, 17),
+    # Semi-transparent HUD background
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (300, 66), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    cv2.putText(frame, camera_name[:30], (6, 17),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    cv2.putText(frame, f"IN:{count_in}  OUT:{count_out}  NET:{net}", (6, 44),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
+    cv2.putText(frame, f"IN:{count_in}  OUT:{count_out}  NET:{net}", (6, 48),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     return frame
+
+
+def _open_capture(url: str) -> cv2.VideoCapture:
+    """
+    Open a video capture with low-latency settings appropriate for the URL type.
+    Supports: RTSP, RTMP, HTTP MJPEG/HLS, local file/device index.
+    """
+    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+
+    lower = url.lower()
+    if lower.startswith("rtsp://") or lower.startswith("rtmp://"):
+        # RTSP/RTMP: minimal buffer, TCP transport, fast open
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
+        # Force TCP for more reliable RTSP delivery
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*'H264'))
+    elif lower.startswith("http://") or lower.startswith("https://"):
+        # HTTP MJPEG / HLS: slightly larger buffer for network jitter
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15_000)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15_000)
+    else:
+        # Local file or device index
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    return cap
 
 
 class CameraWorker:
     """
     Background thread: capture → detect → count → annotate → push.
 
-    Key improvements:
-    - Counter update published every frame (not only on crossing) so dashboard
-      shows live counts even when nobody is crossing.
-    - Thread-safe line reload via RLock.
-    - Exponential back-off on reconnect.
-    - Low-latency RTSP flags: FFMPEG backend, buffer=1, TCP transport.
+    Supports RTSP, RTMP, HTTP MJPEG/HLS, and local video files.
+    YouTube and other social media URLs are not supported.
+
+    Accuracy features:
+    - YOLOv8s with ByteTrack (configured in YoloV8Detector)
+    - Crossing guard in EntryExitCounter (3-frame confirmation)
+    - Foot-point line crossing (more stable than centroid)
+    - Minimum bounding box size filter
     """
 
     def __init__(
@@ -165,41 +162,20 @@ class CameraWorker:
     def _run(self) -> None:
         logger.info("CameraWorker starting", camera_id=self._camera.id)
         while not self._stop_event.is_set():
+            cap: Optional[cv2.VideoCapture] = None
             try:
-                raw_url = decrypt_credential(self._camera.url_encrypted)
+                url = decrypt_credential(self._camera.url_encrypted)
+                logger.info("Opening stream", camera_id=self._camera.id,
+                            url=url[:60] if url else "")
 
-                # Resolve YouTube / Twitch / etc. to direct stream URL via yt-dlp
-                source_type = getattr(self._camera, "source_type", "rtsp") or "rtsp"
-                if source_type == "youtube":
-                    url = _resolve_stream_url(raw_url)
-                elif source_type in ("rtsp", "http"):
-                    # Also try yt-dlp for http URLs that look like web video pages
-                    url = _resolve_stream_url(raw_url)
-                else:
-                    url = raw_url
-
-                # Low-latency capture: prefer FFMPEG backend, minimal buffer
-                is_web_stream = source_type == "youtube" or any(
-                    d in raw_url.lower() for d in _YTDLP_DOMAINS
-                )
-                cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-                if is_web_stream:
-                    # Web streams need larger buffer — they have variable latency
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
-                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)
-                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 30000)
-                else:
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
-                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
-
+                cap = _open_capture(url)
                 if not cap.isOpened():
-                    raise RuntimeError("Cannot open stream")
+                    raise RuntimeError(f"Cannot open stream: {url[:60]}")
 
                 self._set_status(CameraStatus.active)
                 self._reconnect_delay = _RECONNECT_DELAY_MIN  # reset on success
 
-                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  or 640
                 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
 
                 with self._counter_lock:
@@ -211,15 +187,20 @@ class CameraWorker:
                             frame_w=w, frame_h=h,
                         )
 
-                frame_count = 0
+                consecutive_failures = 0
                 while not self._stop_event.is_set():
                     ok, frame = cap.read()
                     if not ok:
-                        logger.warning("Frame read failed", camera_id=self._camera.id)
-                        break
+                        consecutive_failures += 1
+                        if consecutive_failures >= 5:
+                            logger.warning("Too many consecutive frame failures",
+                                           camera_id=self._camera.id)
+                            break
+                        time.sleep(0.05)
+                        continue
 
+                    consecutive_failures = 0
                     detections = self._detector.detect(frame)
-                    frame_count += 1
 
                     with self._counter_lock:
                         crossing_events = []
@@ -229,13 +210,11 @@ class CameraWorker:
                         for ev in crossing_events:
                             self._on_crossing(ev.camera_id, ev.direction, ev.track_id)
 
-                        # Publish counter every frame for live dashboard
-                        # (on_crossing only fires for actual crossings)
                         count_in  = self._counter.count_in  if self._counter else 0
                         count_out = self._counter.count_out if self._counter else 0
                         line_snap = self._line
 
-                    # Publish counter update every frame so WS clients stay current
+                    # Publish counter every frame so WS dashboard stays live
                     self._publish_counter(count_in, count_out)
 
                     annotated = _draw_overlay(
@@ -244,14 +223,14 @@ class CameraWorker:
                     )
                     self._broker.put_frame(self._camera.id, annotated)
 
-                cap.release()
-
             except Exception as exc:
                 logger.error("CameraWorker error",
                              camera_id=self._camera.id, error=str(exc))
                 self._set_status(CameraStatus.error)
 
             finally:
+                if cap is not None:
+                    cap.release()
                 if not self._stop_event.is_set():
                     logger.info("Reconnecting",
                                 camera_id=self._camera.id,
@@ -303,10 +282,8 @@ class CameraWorker:
         try:
             new_line = LineConfig.from_dict(json.loads(line_config))
             with self._counter_lock:
-                if self._counter:
-                    w, h = self._counter._frame_w, self._counter._frame_h
-                else:
-                    w, h = 640, 480
+                w = self._counter._frame_w if self._counter else 640
+                h = self._counter._frame_h if self._counter else 480
                 self._line = new_line
                 self._counter = EntryExitCounter(
                     camera_id=self._camera.id,

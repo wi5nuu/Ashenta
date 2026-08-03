@@ -60,6 +60,12 @@ class UserRepository:
         self._db.commit()
         return self.get_by_id(user_id)
 
+    def update_password(self, user_id: int, hashed_password: str) -> None:
+        self._db.execute(
+            update(User).where(User.id == user_id).values(hashed_password=hashed_password)
+        )
+        self._db.commit()
+
 
 # ---------------------------------------------------------------------------
 # RefreshToken repository
