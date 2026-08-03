@@ -249,7 +249,7 @@ class EntryExitCounter:
         line_len = max(
             ((lx2 - lx1) ** 2 + (ly2 - ly1) ** 2) ** 0.5, 1.0
         )
-        # Dead-zone threshold: ignore if within 1% of line length
+        # Dead-zone: ignore detections within 1% of line length from the line
         dead_zone = line_len * 0.01
 
         events: List[CrossingEvent] = []
@@ -259,12 +259,11 @@ class EntryExitCounter:
             tid = det.track_id
             seen_ids.add(tid)
 
-            # Use foot point for more stable line crossing
+            # Use foot point (bottom-centre) for more stable line crossing
             px, py = det.foot
-
             raw = _side_of_line(lx1, ly1, lx2, ly2, px, py)
 
-            # Dead-zone: skip if too close to the line
+            # Skip detections in the dead-zone right on the line
             if abs(raw) < dead_zone:
                 continue
 
@@ -272,70 +271,52 @@ class EntryExitCounter:
             prev = self._prev_side.get(tid)
 
             if prev is None:
-                # First time we see this track — just record side, no crossing
+                # First time we see this track — record which side it's on
                 self._prev_side[tid] = side
                 continue
 
             if side == prev:
-                # Same side — check if we have a pending candidate to confirm
-                cand = self._crossing_candidate.get(tid)
-                if cand is not None:
-                    cand_side, cand_count = cand
-                    if cand_side == side:
-                        # Still on the candidate side — increment guard counter
-                        new_count = cand_count + 1
-                        if new_count >= _CROSSING_GUARD_FRAMES:
-                            # Crossing confirmed — fire event
-                            if prev == 1.0 and side == -1.0:
-                                # prev was +1, now confirmed on -1 → "in"
-                                pass  # handled below when candidate was set
-                            # Determine direction from the OLD prev_side
-                            # (stored when candidate was created)
-                            old_side = self._crossing_candidate.get(tid, (side, 0))[0]
-                            # fire based on direction of change
-                            if old_side != self._prev_side.get(tid, old_side):
-                                pass
-                            del self._crossing_candidate[tid]
-                            self._prev_side[tid] = side
-                        else:
-                            self._crossing_candidate[tid] = (cand_side, new_count)
-                    else:
-                        # Candidate changed — reset
-                        self._crossing_candidate[tid] = (side, 1)
-                # No candidate — all good, update side
-                self._prev_side[tid] = side
-            else:
-                # Side changed vs confirmed prev — start or extend candidate
-                cand = self._crossing_candidate.get(tid)
-                if cand is None:
-                    self._crossing_candidate[tid] = (side, 1)
-                else:
-                    cand_side, cand_count = cand
-                    if cand_side == side:
-                        new_count = cand_count + 1
-                        if new_count >= _CROSSING_GUARD_FRAMES:
-                            # Confirmed crossing
-                            if prev > 0 and side < 0:
-                                self._count_in += 1
-                                events.append(CrossingEvent(
-                                    track_id=tid, direction="in",
-                                    camera_id=self._camera_id,
-                                ))
-                            elif prev < 0 and side > 0:
-                                self._count_out += 1
-                                events.append(CrossingEvent(
-                                    track_id=tid, direction="out",
-                                    camera_id=self._camera_id,
-                                ))
-                            del self._crossing_candidate[tid]
-                            self._prev_side[tid] = side
-                        else:
-                            self._crossing_candidate[tid] = (cand_side, new_count)
-                    else:
-                        # Bounced back — reset candidate
-                        self._crossing_candidate[tid] = (side, 1)
+                # Still on the same confirmed side — nothing to do
+                # Clear any stale candidate (track bounced back)
+                self._crossing_candidate.pop(tid, None)
+                continue
 
-        # Prune stale track IDs to avoid unbounded growth
+            # side != prev: track has moved to the other side of the line.
+            # Use the crossing guard to require _CROSSING_GUARD_FRAMES
+            # consecutive frames on the new side before confirming.
+            cand = self._crossing_candidate.get(tid)
+            if cand is None:
+                # Start a new candidate
+                self._crossing_candidate[tid] = (side, 1)
+            else:
+                cand_side, cand_count = cand
+                if cand_side == side:
+                    # Still on the candidate side — increment guard counter
+                    new_count = cand_count + 1
+                    if new_count >= _CROSSING_GUARD_FRAMES:
+                        # Crossing confirmed — fire event
+                        if prev > 0 and side < 0:
+                            self._count_in += 1
+                            events.append(CrossingEvent(
+                                track_id=tid, direction="in",
+                                camera_id=self._camera_id,
+                            ))
+                        elif prev < 0 and side > 0:
+                            self._count_out += 1
+                            events.append(CrossingEvent(
+                                track_id=tid, direction="out",
+                                camera_id=self._camera_id,
+                            ))
+                        # Update confirmed side, clear candidate
+                        self._prev_side[tid] = side
+                        del self._crossing_candidate[tid]
+                    else:
+                        self._crossing_candidate[tid] = (cand_side, new_count)
+                else:
+                    # Track bounced to yet another side — reset candidate
+                    self._crossing_candidate[tid] = (side, 1)
+
+        # Prune stale track IDs to avoid unbounded memory growth
         stale = set(self._prev_side.keys()) - seen_ids
         for sid in stale:
             self._prev_side.pop(sid, None)
