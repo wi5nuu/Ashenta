@@ -23,7 +23,7 @@ export default function LoginPage() {
       setToken(res.data.access_token)
       navigate('/')
     } catch (err) {
-      setError(typeof err === 'string' ? err : 'Login gagal')
+      setError(typeof err === 'string' ? err : 'Username atau password salah.')
     } finally {
       setLoading(false)
     }
@@ -31,22 +31,54 @@ export default function LoginPage() {
 
   return (
     <div className={styles.page}>
-      <form className={styles.card} onSubmit={handleLogin}>
-        <h2 className={styles.title}>Ashenta</h2>
-        <p className={styles.sub}>Sistem Deteksi &amp; Analitik Pengunjung Toko</p>
-        <FormGroup label="Username">
-          <input value={username} onChange={e => setUsername(e.target.value)}
-            placeholder="admin" autoComplete="username" autoFocus />
-        </FormGroup>
-        <FormGroup label="Password">
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-            placeholder="••••••••" autoComplete="current-password" />
-        </FormGroup>
-        {error && <div className={styles.error}>{error}</div>}
-        <Btn variant="primary" className={styles.fullBtn} loading={loading} type="submit">
-          Masuk
-        </Btn>
-      </form>
+      <div className={styles.card}>
+        <div className={styles.logoArea}>
+          <img src="/android-chrome-192x192.png" alt="Ashenta" className={styles.logoMark} />
+          <span className={styles.logoName}>Ashenta</span>
+        </div>
+
+        <h2 className={styles.heading}>Masuk ke akun Anda</h2>
+        <p className={styles.sub}>Platform analitik pengunjung berbasis AI</p>
+
+        <form className={styles.form} onSubmit={handleLogin}>
+          <FormGroup label="Username">
+            <input
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              placeholder="Masukkan username"
+              autoComplete="username"
+              autoFocus
+            />
+          </FormGroup>
+          <FormGroup label="Password">
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
+            />
+          </FormGroup>
+
+          {error && (
+            <div className={styles.error}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+                <path d="M6 4v2.5M6 8h.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
+              {error}
+            </div>
+          )}
+
+          <Btn variant="primary" className={styles.submitBtn} loading={loading} type="submit">
+            Masuk
+          </Btn>
+        </form>
+
+        <div className={styles.footer}>
+          Ashenta &copy; {new Date().getFullYear()}
+        </div>
+      </div>
     </div>
   )
 }
