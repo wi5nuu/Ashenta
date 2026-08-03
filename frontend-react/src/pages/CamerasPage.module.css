@@ -1,31 +1,172 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   CAMERAS PAGE — Premium
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
 .header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 1.25rem;
-}
-.header h2 { font-size: 1.1rem; font-weight: 700; }
-
-.empty {
-  text-align: center;
-  color: var(--muted);
-  padding: 2.5rem 1rem;
-  font-size: .875rem;
-}
-
-.actions {
-  display: flex;
-  gap: .4rem;
+  gap: 1rem;
+  margin-bottom: 2rem;
   flex-wrap: wrap;
 }
+.headerLeft {}
+.title {
+  font-size: 1.25rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -.03em;
+  line-height: 1.2;
+}
+.sub {
+  font-size: .8125rem;
+  color: var(--text4);
+  margin-top: .3rem;
+  letter-spacing: -.005em;
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-shrink: 0;
+}
 
-.tag {
-  font-size: .72rem;
-  background: rgba(129,140,248,.1);
-  color: var(--accent2);
-  border: 1px solid rgba(129,140,248,.2);
-  padding: .15rem .5rem;
-  border-radius: 4px;
+/* ── Stats bar ──────────────────────────────────────────────────────────── */
+.statsBar {
+  display: flex;
+  gap: .75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.statPill {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4375rem .875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: .8rem;
+  color: var(--text3);
+  letter-spacing: -.005em;
+}
+.statPillDot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.statPillActive .statPillDot {
+  background: var(--success);
+  box-shadow: 0 0 5px var(--success);
+  animation: blink 2.5s ease infinite;
+}
+.statPillTotal .statPillDot { background: var(--text4); }
+.statPillNum {
   font-weight: 600;
-  text-transform: uppercase;
+  color: var(--text);
+  letter-spacing: -.02em;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* ── Grid ───────────────────────────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+.emptyWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 5rem 2rem;
+  text-align: center;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+}
+.emptyIcon {
+  width: 56px; height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--grad-subtle);
+  border: 1px solid var(--accent-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  margin-bottom: 1.25rem;
+}
+.emptyTitle {
+  font-size: .9375rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -.02em;
+  margin-bottom: .375rem;
+}
+.emptyDesc {
+  font-size: .8125rem;
+  color: var(--text4);
+  line-height: 1.65;
+  max-width: 280px;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Loading skeleton grid ──────────────────────────────────────────────── */
+.skeletonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+.skeletonCard {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease infinite;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  height: 260px;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ── Delete confirm modal ───────────────────────────────────────────────── */
+.deleteBody {
+  display: flex;
+  flex-direction: column;
+  gap: .875rem;
+}
+.deleteWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  padding: .875rem 1rem;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+}
+.deleteWarningIcon {
+  color: var(--danger);
+  flex-shrink: 0;
+  margin-top: .05rem;
+}
+.deleteWarningText {
+  font-size: .8125rem;
+  color: var(--danger);
+  line-height: 1.6;
+}
+.deleteDesc {
+  font-size: .875rem;
+  color: var(--text3);
+  line-height: 1.65;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .header { flex-direction: column; }
+  .headerActions { width: 100%; }
+  .headerActions button { flex: 1; }
+  .grid { grid-template-columns: 1fr; }
+  .skeletonGrid { grid-template-columns: 1fr; }
+  .statsBar { gap: .5rem; }
 }
