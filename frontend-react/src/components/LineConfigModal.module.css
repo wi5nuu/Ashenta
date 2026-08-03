@@ -18,8 +18,8 @@
 @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
 
 .modal {
-  background: var(--surface);
-  border: 1px solid var(--border2);
+  background: var(--surface3);
+  border: 1px solid var(--border3);
   border-radius: var(--radius-xl);
   width: min(860px, 100%);
   margin: auto;
