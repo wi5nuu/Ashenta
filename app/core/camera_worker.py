@@ -9,6 +9,12 @@ import asyncio
 import cv2
 import numpy as np
 
+try:
+    import yt_dlp as _yt_dlp
+    _YT_DLP_AVAILABLE = True
+except ImportError:
+    _YT_DLP_AVAILABLE = False
+
 from app.config.logging import get_logger
 from app.core.vision import (
     DetectorInterface, EntryExitCounter, LineConfig, CrossingEvent
@@ -69,23 +75,71 @@ def _draw_overlay(
     return frame
 
 
+_YOUTUBE_DOMAINS = (
+    "youtube.com/", "youtu.be/", "www.youtube.com/",
+    "youtube.com/shorts/",
+)
+
+
+def _resolve_yt_dlp(url: str) -> str:
+    """
+    Resolve a YouTube (or other yt-dlp-supported) URL to a direct stream URL.
+    Picks the best format ≤1080p with both video and audio.
+    Raises RuntimeError if yt-dlp is unavailable or extraction fails.
+    """
+    if not _YT_DLP_AVAILABLE:
+        raise RuntimeError("yt-dlp is not installed; cannot open YouTube URL.")
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
+        "noplaylist": True,
+    }
+    with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        # For playlists/channels yt-dlp wraps entries; take first entry
+        if "entries" in info:
+            info = info["entries"][0]
+        # Prefer a direct url field; fall back to requested_formats[0]
+        direct_url = info.get("url")
+        if not direct_url:
+            fmts = info.get("requested_formats") or info.get("formats") or []
+            if fmts:
+                direct_url = fmts[0].get("url")
+        if not direct_url:
+            raise RuntimeError(f"yt-dlp could not extract a stream URL for: {url}")
+        return direct_url
+
+
+def _is_yt_dlp_url(url: str) -> bool:
+    lower = url.lower()
+    return any(d in lower for d in _YOUTUBE_DOMAINS)
+
+
 def _open_capture(url: str) -> cv2.VideoCapture:
     """
     Open a video capture with low-latency settings appropriate for the URL type.
-    Supports: RTSP, RTMP, HTTP MJPEG/HLS, local file/device index.
+    Supports: RTSP, RTMP, HTTP MJPEG/HLS, local file/device index, YouTube (via yt-dlp).
     """
-    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-
+    stream_url = url
     lower = url.lower()
+
+    if _is_yt_dlp_url(url):
+        # Resolve YouTube URL to a direct stream before handing to OpenCV
+        stream_url = _resolve_yt_dlp(url)
+        lower = stream_url.lower()
+
+    cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+
     if lower.startswith("rtsp://") or lower.startswith("rtmp://"):
         # RTSP/RTMP: minimal buffer, TCP transport, fast open
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
         cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
-        # Force TCP for more reliable RTSP delivery
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*'H264'))
     elif lower.startswith("http://") or lower.startswith("https://"):
-        # HTTP MJPEG / HLS: slightly larger buffer for network jitter
+        # HTTP MJPEG / HLS / YouTube direct CDN: slightly larger buffer
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15_000)
         cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15_000)
@@ -100,14 +154,17 @@ class CameraWorker:
     """
     Background thread: capture → detect → count → annotate → push.
 
-    Supports RTSP, RTMP, HTTP MJPEG/HLS, and local video files.
-    YouTube and other social media URLs are not supported.
+    Supports RTSP, RTMP, HTTP MJPEG/HLS, local video files, and YouTube (via yt-dlp).
 
     Accuracy features:
     - YOLOv8s with ByteTrack (configured in YoloV8Detector)
     - Crossing guard in EntryExitCounter (3-frame confirmation)
     - Foot-point line crossing (more stable than centroid)
     - Minimum bounding box size filter
+
+    YouTube note: yt-dlp resolves the URL to a direct CDN stream before OpenCV opens it.
+    The resolved URL expires (typically ~6 hours); the worker's reconnect loop will
+    re-resolve on the next reconnect automatically.
     """
 
     def __init__(
