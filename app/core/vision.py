@@ -92,6 +92,10 @@ class DetectorInterface(abc.ABC):
         """Optional model warmup."""
         ...
 
+    def reset_tracker(self) -> None:
+        """Reset internal tracker state (e.g. on video loop). Optional override."""
+        pass
+
 
 # ---------------------------------------------------------------------------
 # YOLOv8 implementation
@@ -134,6 +138,29 @@ class YoloV8Detector(DetectorInterface):
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         self.detect(dummy)
         logger.info("YoloV8Detector warmup complete")
+
+    def reset_tracker(self) -> None:
+        """Reset ultralytics ByteTrack internal state.
+        Call this when a video loops so track IDs restart from 1 and don't
+        carry over ghost tracks from the previous play-through."""
+        try:
+            # ultralytics stores tracker state per predictor
+            if hasattr(self._model, 'predictor') and self._model.predictor is not None:
+                if hasattr(self._model.predictor, 'trackers'):
+                    for tracker in self._model.predictor.trackers:
+                        if hasattr(tracker, 'reset'):
+                            tracker.reset()
+                        else:
+                            # Fallback: clear tracked objects dict
+                            for attr in ('tracked_stracks', 'lost_stracks',
+                                         'removed_stracks', 'kalman_filter'):
+                                if hasattr(tracker, attr):
+                                    v = getattr(tracker, attr)
+                                    if isinstance(v, list):
+                                        v.clear()
+        except Exception as exc:
+            logger.debug("reset_tracker: minor error (safe to ignore)",
+                         error=str(exc))
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         h, w = frame.shape[:2]
@@ -336,6 +363,13 @@ class EntryExitCounter:
         self._count_in = 0
         self._count_out = 0
 
+    def reset_tracker_state(self) -> None:
+        """Clear tracker state (prev_side, candidates) without resetting counts.
+        Call this when a video loops so track IDs from the new loop are treated
+        as fresh tracks and don't cause spurious crossings."""
+        self._prev_side.clear()
+        self._crossing_candidate.clear()
+
 
 # ---------------------------------------------------------------------------
 # Multi-line counter — aggregates N EntryExitCounter instances
@@ -395,6 +429,11 @@ class MultiLineCounter:
     def reset_daily(self) -> None:
         for c in self._counters:
             c.reset_daily()
+
+    def reset_tracker_state(self) -> None:
+        """Clear tracker state on all child counters (e.g. on video loop)."""
+        for c in self._counters:
+            c.reset_tracker_state()
 
     @staticmethod
     def parse_line_config(raw: str) -> Optional[List[LineConfig]]:

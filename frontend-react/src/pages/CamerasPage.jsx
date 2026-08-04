@@ -273,7 +273,7 @@ export default function CamerasPage() {
             <CameraCard
               key={cam.id}
               camera={cam}
-              counter={wsCounters[cam.id]}
+              counter={wsCounters[cam.id] ?? wsCounters[String(cam.id)]}
               onDetail={(id)    => setDetailId(id)}
               onEdit={(c)       => { setEditCam(c); setShowAdd(true) }}
               onDelete={(id)    => setConfirmId(id)}

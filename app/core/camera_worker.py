@@ -312,9 +312,25 @@ class CameraWorker:
                         )
 
                 consecutive_failures = 0
+                is_video_file = getattr(self._camera, 'source_type', '') == 'video'
+                last_frame_pos = -1.0
+
                 while not self._stop_event.is_set():
                     ok, frame = cap.read()
                     if not ok:
+                        if is_video_file:
+                            # EOF reached — loop video from beginning and reset
+                            # tracker state so track IDs restart cleanly
+                            logger.info("Video EOF — looping",
+                                        camera_id=self._camera.id)
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            last_frame_pos = -1.0
+                            with self._counter_lock:
+                                if self._counter is not None:
+                                    self._counter.reset_tracker_state()
+                            self._detector.reset_tracker()
+                            consecutive_failures = 0
+                            continue
                         consecutive_failures += 1
                         if consecutive_failures >= 5:
                             logger.warning("Too many consecutive frame failures",
@@ -322,6 +338,16 @@ class CameraWorker:
                             break
                         time.sleep(0.05)
                         continue
+
+                    # Detect video seeking backwards (extra guard for looped files)
+                    if is_video_file:
+                        cur_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
+                        if cur_pos < last_frame_pos:
+                            with self._counter_lock:
+                                if self._counter is not None:
+                                    self._counter.reset_tracker_state()
+                            self._detector.reset_tracker()
+                        last_frame_pos = cur_pos
 
                     consecutive_failures = 0
                     detections = self._detector.detect(frame)
