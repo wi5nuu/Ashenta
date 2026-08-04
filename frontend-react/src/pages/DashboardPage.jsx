@@ -113,7 +113,7 @@ export default function DashboardPage() {
         ) : (
           <div className={styles.grid}>
             {cameras.map(cam => (
-              <CameraCard key={cam.id} camera={cam} counter={counters[cam.id]} />
+              <CameraCard key={cam.id} camera={cam} counter={counters[cam.id] ?? counters[String(cam.id)]} minimal />
             ))}
           </div>
         )}

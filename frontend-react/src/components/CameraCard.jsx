@@ -36,6 +36,7 @@ export default function CameraCard({
   stopLoading,
   restartLoading,
   onDetail,
+  minimal = false,  // true = dashboard mode: hanya stream + counter, tanpa action buttons
 }) {
   const [streaming,   setStreaming]   = useState(false)
   const [streamErr,   setStreamErr]   = useState(false)
@@ -173,7 +174,7 @@ export default function CameraCard({
       </div>
 
       {/* ── Info header ──────────────────────────────────────────────────── */}
-      <div className={styles.info} onClick={() => onDetail?.(camera.id)} style={{ cursor: 'pointer' }}>
+      <div className={styles.info} onClick={() => !minimal && onDetail?.(camera.id)} style={{ cursor: minimal ? 'default' : 'pointer' }}>
         <div className={styles.infoLeft}>
           <div className={styles.camName}>{camera.name}</div>
           <div className={styles.camMeta}>
@@ -189,29 +190,33 @@ export default function CameraCard({
             <span className={`${styles.camSourceTag} ${styles[`src_${camera.source_type || 'rtsp'}`] || ''}`}>
               {SOURCE_LABEL[camera.source_type] || (camera.source_type || 'RTSP').toUpperCase()}
             </span>
-            {/* Line config indicator inline */}
-            <span className={`${styles.lineIndicator} ${hasLine ? styles.lineIndicatorSet : ''}`}>
-              <span className={styles.lineIndicatorDot} />
-              {hasLine ? `Garis terset (${lineCount})` : 'Garis belum diset'}
-            </span>
+            {/* Line config indicator inline — hide in minimal mode */}
+            {!minimal && (
+              <span className={`${styles.lineIndicator} ${hasLine ? styles.lineIndicatorSet : ''}`}>
+                <span className={styles.lineIndicatorDot} />
+                {hasLine ? `Garis terset (${lineCount})` : 'Garis belum diset'}
+              </span>
+            )}
           </div>
         </div>
-        {/* Expand details toggle */}
-        <button
-          className={styles.expandBtn}
-          onClick={e => { e.stopPropagation(); setShowDetails(v => !v) }}
-          title={showDetails ? 'Sembunyikan detail' : 'Tampilkan detail'}
-          aria-expanded={showDetails}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-            style={{ transform: showDetails ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>
-            <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
+        {/* Expand details toggle — hide in minimal mode */}
+        {!minimal && (
+          <button
+            className={styles.expandBtn}
+            onClick={e => { e.stopPropagation(); setShowDetails(v => !v) }}
+            title={showDetails ? 'Sembunyikan detail' : 'Tampilkan detail'}
+            aria-expanded={showDetails}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+              style={{ transform: showDetails ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>
+              <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
       </div>
 
-      {/* ── Expanded detail rows ──────────────────────────────────────────── */}
-      {showDetails && (
+      {/* ── Expanded detail rows — disembunyikan di minimal mode ─────────── */}
+      {!minimal && showDetails && (
         <div className={styles.details}>
           <div className={styles.detailRow}>
             <span className={styles.detailKey}>Status</span>
@@ -282,7 +287,8 @@ export default function CameraCard({
         </div>
       )}
 
-      {/* ── Actions footer ────────────────────────────────────────────────── */}
+      {/* ── Actions footer — disembunyikan di minimal/dashboard mode ──────── */}
+      {!minimal && (
       <div className={styles.actions}>
         {/* Line config */}
         <button
@@ -374,6 +380,7 @@ export default function CameraCard({
           </svg>
         </button>
       </div>
+      )}
     </div>
   )
 }
