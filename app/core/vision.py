@@ -1,4 +1,12 @@
-"""Core computer vision abstractions (DetectorInterface, YoloV8Detector, EntryExitCounter)."""
+"""Core computer vision abstractions (DetectorInterface, YoloV8Detector, EntryExitCounter).
+
+Professional people-counting pipeline:
+- ByteTrack tracker via ultralytics for stable multi-person tracking
+- Foot-point (bottom-centre) line crossing for accuracy
+- Interpolation-based crossing: check if track path INTERSECTS the line between frames
+  (eliminates dependency on guard frame count entirely)
+- Dead-zone eliminated — interpolation handles jitter naturally
+"""
 from __future__ import annotations
 import abc
 import json
@@ -55,10 +63,14 @@ class LineConfig:
     y1: float
     x2: float
     y2: float
+    label: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "LineConfig":
-        return cls(x1=d["x1"], y1=d["y1"], x2=d["x2"], y2=d["y2"])
+        return cls(
+            x1=d["x1"], y1=d["y1"], x2=d["x2"], y2=d["y2"],
+            label=d.get("label"),
+        )
 
     def to_dict(self) -> dict:
         return {"x1": self.x1, "y1": self.y1, "x2": self.x2, "y2": self.y2}
@@ -78,7 +90,7 @@ class CrossingEvent:
 
 
 # ---------------------------------------------------------------------------
-# Abstract detector interface (SOLID – Dependency Inversion)
+# Abstract detector interface
 # ---------------------------------------------------------------------------
 
 class DetectorInterface(abc.ABC):
@@ -101,28 +113,28 @@ class DetectorInterface(abc.ABC):
 # YOLOv8 implementation
 # ---------------------------------------------------------------------------
 
-# Minimum bounding box area as fraction of total frame area.
-# Filters out tiny detections caused by background noise.
-_MIN_BOX_AREA_RATIO = 0.002   # 0.2% of frame — ignores sub-pixel ghosts
-_MIN_BOX_HEIGHT_RATIO = 0.04  # box height must be at least 4% of frame height
+# Relaxed thresholds for better detection coverage:
+# - Smaller min_area catches people who are far away or partially visible
+# - Smaller min_height allows detection of distant/crouching people
+_MIN_BOX_AREA_RATIO  = 0.0005  # 0.05% of frame (was 0.2% — too restrictive)
+_MIN_BOX_HEIGHT_RATIO = 0.02   # 2% of frame height (was 4% — too restrictive)
 
 
 class YoloV8Detector(DetectorInterface):
     """
     YOLOv8 person detector with ByteTrack tracking via ultralytics.
 
-    Accuracy improvements over the baseline:
-    - Uses yolov8s.pt (small) instead of yolov8n.pt (nano): ~5% higher mAP
-    - Confidence threshold 0.50 to reduce false positives
-    - IOU threshold 0.45 for tighter NMS
-    - imgsz=640 explicit (default but ensures no accidental downscaling)
-    - Minimum bounding box size filter applied post-detection
+    Tuned for people-counting:
+    - confidence 0.35: catches partially occluded people (was 0.50 — missed many)
+    - iou 0.45: standard NMS threshold
+    - tracker="bytetrack.yaml": best for crowded scenes
+    - imgsz=640: standard input size
     """
 
     def __init__(
         self,
-        model_path: str = "yolov8s.pt",
-        confidence: float = 0.50,
+        model_path: str = "yolov8n.pt",
+        confidence: float = 0.35,
         iou: float = 0.45,
     ):
         import os
@@ -140,20 +152,16 @@ class YoloV8Detector(DetectorInterface):
         logger.info("YoloV8Detector warmup complete")
 
     def reset_tracker(self) -> None:
-        """Reset ultralytics ByteTrack internal state.
-        Call this when a video loops so track IDs restart from 1 and don't
-        carry over ghost tracks from the previous play-through."""
+        """Reset ultralytics ByteTrack internal state (e.g. on video loop)."""
         try:
-            # ultralytics stores tracker state per predictor
             if hasattr(self._model, 'predictor') and self._model.predictor is not None:
                 if hasattr(self._model.predictor, 'trackers'):
                     for tracker in self._model.predictor.trackers:
                         if hasattr(tracker, 'reset'):
                             tracker.reset()
                         else:
-                            # Fallback: clear tracked objects dict
                             for attr in ('tracked_stracks', 'lost_stracks',
-                                         'removed_stracks', 'kalman_filter'):
+                                         'removed_stracks'):
                                 if hasattr(tracker, attr):
                                     v = getattr(tracker, attr)
                                     if isinstance(v, list):
@@ -165,7 +173,7 @@ class YoloV8Detector(DetectorInterface):
     def detect(self, frame: np.ndarray) -> List[Detection]:
         h, w = frame.shape[:2]
         frame_area = float(w * h)
-        min_area  = frame_area * _MIN_BOX_AREA_RATIO
+        min_area   = frame_area * _MIN_BOX_AREA_RATIO
         min_height = h * _MIN_BOX_HEIGHT_RATIO
 
         results = self._model.track(
@@ -176,6 +184,7 @@ class YoloV8Detector(DetectorInterface):
             iou=self._iou,
             imgsz=640,
             verbose=False,
+            tracker="bytetrack.yaml",
         )
 
         detections: List[Detection] = []
@@ -183,18 +192,17 @@ class YoloV8Detector(DetectorInterface):
             if r.boxes is None:
                 continue
             boxes = r.boxes
-            ids = boxes.id
+            ids   = boxes.id
             if ids is None:
                 continue
             for i, box in enumerate(boxes):
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
-                conf = float(box.conf[0])
+                conf     = float(box.conf[0])
                 track_id = int(ids[i])
 
                 bw = x2 - x1
                 bh = y2 - y1
 
-                # Filter out too-small detections (background artefacts)
                 if bw * bh < min_area or bh < min_height:
                     continue
 
@@ -207,37 +215,72 @@ class YoloV8Detector(DetectorInterface):
 
 
 # ---------------------------------------------------------------------------
-# Entry / Exit Counter
+# Geometry helpers
 # ---------------------------------------------------------------------------
+
+def _cross2d(ax: float, ay: float, bx: float, by: float) -> float:
+    """2D cross product of vectors A and B."""
+    return ax * by - ay * bx
+
+
+def _segments_intersect(
+    p1x: float, p1y: float, p2x: float, p2y: float,
+    p3x: float, p3y: float, p4x: float, p4y: float,
+) -> Optional[float]:
+    """
+    Check if segment P1-P2 (track path) crosses segment P3-P4 (counting line).
+    Returns the signed cross product at crossing to determine direction,
+    or None if segments do not intersect.
+
+    Direction convention:
+      - positive → "in"  (crossed from left to right relative to line direction)
+      - negative → "out"
+    """
+    d1x, d1y = p2x - p1x, p2y - p1y  # track motion vector
+    d2x, d2y = p4x - p3x, p4y - p3y  # line direction vector
+
+    denom = _cross2d(d1x, d1y, d2x, d2y)
+    if abs(denom) < 1e-10:
+        return None  # parallel
+
+    t = _cross2d(p3x - p1x, p3y - p1y, d2x, d2y) / denom
+    u = _cross2d(p3x - p1x, p3y - p1y, d1x, d1y) / denom
+
+    # Both parameters must be in [0, 1] for intersection within segments
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        # Return direction: positive = "in", negative = "out"
+        # This is the cross product of line direction × motion direction
+        return _cross2d(d2x, d2y, d1x, d1y)
+    return None
+
 
 def _side_of_line(
     lx1: float, ly1: float, lx2: float, ly2: float,
     px: float, py: float
 ) -> float:
-    """Signed area of the triangle – positive = one side, negative = other."""
+    """Signed area of the triangle — positive = one side, negative = other."""
     return (lx2 - lx1) * (py - ly1) - (ly2 - ly1) * (px - lx1)
 
 
-# Number of consecutive frames a track must be on the same side before a
-# crossing is registered.  2 frames = balance antara accuracy dan responsiveness.
-# (Nilai 3 terlalu ketat untuk video dengan frame skipping aktif)
-_CROSSING_GUARD_FRAMES = 2
-
+# ---------------------------------------------------------------------------
+# Entry / Exit Counter — interpolation-based crossing
+# ---------------------------------------------------------------------------
 
 class EntryExitCounter:
     """
-    Stateful counter per camera.
+    Professional stateful counter using SEGMENT INTERSECTION for crossing detection.
 
-    Crossing direction convention:
-        - "in"  when sign flips from positive → negative
-        - "out" when sign flips from negative → positive
+    Why interpolation > guard-frame approach:
+    - Guard frames require N consecutive frames on the new side — fails when:
+      * person moves quickly (crosses in 1-2 frames)
+      * frame skipping is active
+      * YOLO misses 1 frame mid-crossing
+    - Segment intersection checks if the foot-point PATH between two frames
+      actually crosses the line — works regardless of speed or frame rate.
 
-    Accuracy improvements:
-    - Uses foot point (bottom-centre) instead of centroid for line testing
-    - Crossing guard: track must be stable on the new side for
-      _CROSSING_GUARD_FRAMES consecutive frames before counting
-    - Dead-zone: detections within 1% of the line are ignored (side == 0)
-      to prevent flickering at the boundary
+    Crossing direction:
+      - "in"  when track crosses from positive side to negative side of line
+      - "out" when track crosses from negative side to positive side of line
     """
 
     def __init__(
@@ -248,107 +291,89 @@ class EntryExitCounter:
         frame_h: int = 480,
     ):
         self._camera_id = camera_id
-        self._line = line
-        self._frame_w = frame_w
-        self._frame_h = frame_h
+        self._line      = line
+        self._frame_w   = frame_w
+        self._frame_h   = frame_h
 
         self._count_in  = 0
         self._count_out = 0
 
-        # last confirmed side per track_id (+1 or -1)
-        self._prev_side: Dict[int, float] = {}
+        # Previous foot position per track_id for interpolation
+        self._prev_foot: Dict[int, Tuple[float, float]] = {}
 
-        # candidate crossing buffer: track_id -> (candidate_side, frame_count)
-        # When frame_count reaches _CROSSING_GUARD_FRAMES the crossing fires.
-        self._crossing_candidate: Dict[int, Tuple[float, int]] = {}
+        # Cooldown: track_id → frames_until_can_count_again
+        # Prevents double-counting from detection jitter right after a crossing
+        self._cooldown: Dict[int, int] = {}
+        self._COOLDOWN_FRAMES = 8  # frames to ignore same track after crossing
 
     def _pixel_line(self) -> Tuple[float, float, float, float]:
         """Return line endpoints in pixel space."""
-        lx1 = self._line.x1 * self._frame_w
-        ly1 = self._line.y1 * self._frame_h
-        lx2 = self._line.x2 * self._frame_w
-        ly2 = self._line.y2 * self._frame_h
-        return lx1, ly1, lx2, ly2
+        return (
+            self._line.x1 * self._frame_w,
+            self._line.y1 * self._frame_h,
+            self._line.x2 * self._frame_w,
+            self._line.y2 * self._frame_h,
+        )
 
     def update(self, detections: List[Detection]) -> List[CrossingEvent]:
         lx1, ly1, lx2, ly2 = self._pixel_line()
-
-        # Normalise line length for dead-zone calculation
-        line_len = max(
-            ((lx2 - lx1) ** 2 + (ly2 - ly1) ** 2) ** 0.5, 1.0
-        )
-        # Dead-zone: ignore detections within 1% of line length from the line
-        dead_zone = line_len * 0.01
-
         events: List[CrossingEvent] = []
         seen_ids: set = set()
+
+        # Decrement cooldowns
+        expired = [tid for tid, c in self._cooldown.items() if c <= 1]
+        for tid in expired:
+            del self._cooldown[tid]
+        for tid in self._cooldown:
+            self._cooldown[tid] -= 1
 
         for det in detections:
             tid = det.track_id
             seen_ids.add(tid)
 
-            # Use foot point (bottom-centre) for more stable line crossing
-            px, py = det.foot
-            raw = _side_of_line(lx1, ly1, lx2, ly2, px, py)
+            curr_foot = det.foot  # (fx, fy) in pixel space
 
-            # Skip detections in the dead-zone right on the line
-            if abs(raw) < dead_zone:
+            prev_foot = self._prev_foot.get(tid)
+            self._prev_foot[tid] = curr_foot
+
+            if prev_foot is None:
+                # First time seeing this track — just record position
                 continue
 
-            side = 1.0 if raw > 0 else -1.0
-            prev = self._prev_side.get(tid)
-
-            if prev is None:
-                # First time we see this track — record which side it's on
-                self._prev_side[tid] = side
+            # Skip if track is in cooldown
+            if tid in self._cooldown:
                 continue
 
-            if side == prev:
-                # Still on the same confirmed side — nothing to do
-                # Clear any stale candidate (track bounced back)
-                self._crossing_candidate.pop(tid, None)
-                continue
+            # Check if track path (prev_foot → curr_foot) intersects the line
+            direction = _segments_intersect(
+                prev_foot[0], prev_foot[1],
+                curr_foot[0],  curr_foot[1],
+                lx1, ly1, lx2, ly2,
+            )
 
-            # side != prev: track has moved to the other side of the line.
-            # Use the crossing guard to require _CROSSING_GUARD_FRAMES
-            # consecutive frames on the new side before confirming.
-            cand = self._crossing_candidate.get(tid)
-            if cand is None:
-                # Start a new candidate
-                self._crossing_candidate[tid] = (side, 1)
+            if direction is None:
+                continue  # no crossing this frame
+
+            if direction > 0:
+                self._count_in += 1
+                self._cooldown[tid] = self._COOLDOWN_FRAMES
+                events.append(CrossingEvent(
+                    track_id=tid, direction="in",
+                    camera_id=self._camera_id,
+                ))
             else:
-                cand_side, cand_count = cand
-                if cand_side == side:
-                    # Still on the candidate side — increment guard counter
-                    new_count = cand_count + 1
-                    if new_count >= _CROSSING_GUARD_FRAMES:
-                        # Crossing confirmed — fire event
-                        if prev > 0 and side < 0:
-                            self._count_in += 1
-                            events.append(CrossingEvent(
-                                track_id=tid, direction="in",
-                                camera_id=self._camera_id,
-                            ))
-                        elif prev < 0 and side > 0:
-                            self._count_out += 1
-                            events.append(CrossingEvent(
-                                track_id=tid, direction="out",
-                                camera_id=self._camera_id,
-                            ))
-                        # Update confirmed side, clear candidate
-                        self._prev_side[tid] = side
-                        del self._crossing_candidate[tid]
-                    else:
-                        self._crossing_candidate[tid] = (cand_side, new_count)
-                else:
-                    # Track bounced to yet another side — reset candidate
-                    self._crossing_candidate[tid] = (side, 1)
+                self._count_out += 1
+                self._cooldown[tid] = self._COOLDOWN_FRAMES
+                events.append(CrossingEvent(
+                    track_id=tid, direction="out",
+                    camera_id=self._camera_id,
+                ))
 
-        # Prune stale track IDs to avoid unbounded memory growth
-        stale = set(self._prev_side.keys()) - seen_ids
+        # Prune stale track IDs to avoid memory growth
+        stale = set(self._prev_foot.keys()) - seen_ids
         for sid in stale:
-            self._prev_side.pop(sid, None)
-            self._crossing_candidate.pop(sid, None)
+            self._prev_foot.pop(sid, None)
+            self._cooldown.pop(sid, None)
 
         return events
 
@@ -361,15 +386,13 @@ class EntryExitCounter:
         return self._count_out
 
     def reset_daily(self) -> None:
-        self._count_in = 0
+        self._count_in  = 0
         self._count_out = 0
 
     def reset_tracker_state(self) -> None:
-        """Clear tracker state (prev_side, candidates) without resetting counts.
-        Call this when a video loops so track IDs from the new loop are treated
-        as fresh tracks and don't cause spurious crossings."""
-        self._prev_side.clear()
-        self._crossing_candidate.clear()
+        """Clear tracker state without resetting counts (e.g. on video loop)."""
+        self._prev_foot.clear()
+        self._cooldown.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -379,14 +402,7 @@ class EntryExitCounter:
 class MultiLineCounter:
     """
     Wraps multiple EntryExitCounter instances (one per virtual line).
-    Exposes the same count_in / count_out / update / reset_daily interface
-    as EntryExitCounter so the rest of the codebase needs no changes.
-
-    Format of lines_config (JSON string stored in Camera.line_config):
-        [{"x1":0.1,"y1":0.5,"x2":0.9,"y2":0.5,"label":"Door A"}, ...]
-
-    Backward compat: if the stored value is a plain dict (single-line legacy)
-    it is automatically wrapped in a list.
+    Exposes the same interface as EntryExitCounter.
     """
 
     def __init__(
@@ -397,7 +413,10 @@ class MultiLineCounter:
         frame_h: int = 480,
     ):
         self._counters: List[EntryExitCounter] = [
-            EntryExitCounter(camera_id=camera_id, line=line, frame_w=frame_w, frame_h=frame_h)
+            EntryExitCounter(
+                camera_id=camera_id, line=line,
+                frame_w=frame_w, frame_h=frame_h,
+            )
             for line in lines
         ]
 
@@ -439,7 +458,7 @@ class MultiLineCounter:
     @staticmethod
     def parse_line_config(raw: str) -> Optional[List[LineConfig]]:
         """
-        Parse line_config JSON string.  Returns a list of LineConfig or None.
+        Parse line_config JSON string. Returns a list of LineConfig or None.
         Handles both legacy single-object format and new array format.
         """
         if not raw:
@@ -447,7 +466,6 @@ class MultiLineCounter:
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                # Legacy single-line format — wrap in list
                 return [LineConfig.from_dict(parsed)]
             if isinstance(parsed, list) and parsed:
                 return [LineConfig.from_dict(d) for d in parsed]

@@ -356,15 +356,14 @@ class CameraWorker:
                     consecutive_failures = 0
                     frame_count += 1
                     should_detect = (frame_count % detect_every == 0)
-                    # IMPORTANT: selalu kirim deteksi terakhir ke counter saat skip
-                    # agar tracker tidak kehilangan track yang sedang melintas.
-                    # Hanya jalankan YOLO saat should_detect, tapi counter tetap
-                    # dapat update setiap frame dengan deteksi terakhir yang valid.
+                    # Dengan interpolation-based crossing, kita HANYA update counter
+                    # saat ada deteksi baru dari YOLO. Frame yang di-skip tidak
+                    # dikirim ke counter agar posisi track tidak "membeku" di posisi
+                    # lama dan menyebabkan crossing palsu.
                     if should_detect:
                         detections = self._detector.detect(frame)
-                        self._last_detections = detections
                     else:
-                        detections = getattr(self, '_last_detections', [])
+                        detections = None  # skip counter update frame ini
 
                     # DEBUG: log detections every 30 frames
                     if not hasattr(self, '_dbg_frame_count'):
@@ -373,13 +372,13 @@ class CameraWorker:
                     if self._dbg_frame_count % 30 == 0:
                         logger.info("DEBUG detections",
                                     camera_id=self._camera.id,
-                                    num_detections=len(detections),
+                                    num_detections=len(detections) if detections is not None else -1,
                                     has_counter=self._counter is not None,
                                     num_lines=len(self._lines))
 
                     with self._counter_lock:
                         crossing_events = []
-                        if self._counter is not None:
+                        if self._counter is not None and detections is not None:
                             crossing_events = self._counter.update(detections)
 
                         for ev in crossing_events:
@@ -391,13 +390,16 @@ class CameraWorker:
 
                         count_in  = self._counter.count_in  if self._counter else 0
                         count_out = self._counter.count_out if self._counter else 0
-                        lines_snap = self._lines
+                        lines_snap = list(self._lines)
 
-                    # Publish counter every frame so WS dashboard stays live
-                    self._publish_counter(count_in, count_out)
+                    # Publish counter hanya saat ada deteksi baru
+                    if detections is not None:
+                        self._publish_counter(count_in, count_out)
 
                     annotated = _draw_overlay(
-                        frame.copy(), detections, lines_snap,
+                        frame.copy(),
+                        detections if detections is not None else [],
+                        lines_snap,
                         count_in, count_out, self._camera.name,
                     )
                     self._broker.put_frame(self._camera.id, annotated)
