@@ -328,6 +328,7 @@
 .actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: .25rem;
   padding: .5rem .75rem;
   border-top: 1px solid var(--border);

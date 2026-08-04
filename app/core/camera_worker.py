@@ -314,6 +314,10 @@ class CameraWorker:
                 consecutive_failures = 0
                 is_video_file = getattr(self._camera, 'source_type', '') == 'video'
                 last_frame_pos = -1.0
+                frame_count = 0
+                # Process detection every N frames to maintain smooth stream FPS.
+                # Crossing logic is unaffected — guards require multiple frames anyway.
+                detect_every = 2  # run YOLO on every 2nd frame
 
                 while not self._stop_event.is_set():
                     ok, frame = cap.read()
@@ -350,7 +354,9 @@ class CameraWorker:
                         last_frame_pos = cur_pos
 
                     consecutive_failures = 0
-                    detections = self._detector.detect(frame)
+                    frame_count += 1
+                    should_detect = (frame_count % detect_every == 0)
+                    detections = self._detector.detect(frame) if should_detect else []
 
                     # DEBUG: log detections every 30 frames
                     if not hasattr(self, '_dbg_frame_count'):
