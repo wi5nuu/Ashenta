@@ -219,8 +219,9 @@ def _side_of_line(
 
 
 # Number of consecutive frames a track must be on the same side before a
-# crossing is registered.  Eliminates ghost crossings from detection jitter.
-_CROSSING_GUARD_FRAMES = 3
+# crossing is registered.  2 frames = balance antara accuracy dan responsiveness.
+# (Nilai 3 terlalu ketat untuk video dengan frame skipping aktif)
+_CROSSING_GUARD_FRAMES = 2
 
 
 class EntryExitCounter:

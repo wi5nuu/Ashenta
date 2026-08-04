@@ -356,7 +356,15 @@ class CameraWorker:
                     consecutive_failures = 0
                     frame_count += 1
                     should_detect = (frame_count % detect_every == 0)
-                    detections = self._detector.detect(frame) if should_detect else []
+                    # IMPORTANT: selalu kirim deteksi terakhir ke counter saat skip
+                    # agar tracker tidak kehilangan track yang sedang melintas.
+                    # Hanya jalankan YOLO saat should_detect, tapi counter tetap
+                    # dapat update setiap frame dengan deteksi terakhir yang valid.
+                    if should_detect:
+                        detections = self._detector.detect(frame)
+                        self._last_detections = detections
+                    else:
+                        detections = getattr(self, '_last_detections', [])
 
                     # DEBUG: log detections every 30 frames
                     if not hasattr(self, '_dbg_frame_count'):
