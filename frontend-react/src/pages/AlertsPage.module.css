@@ -1,0 +1,194 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ALERTS PAGE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+}
+.title {
+  font-size: 1.25rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -.03em;
+  line-height: 1.2;
+}
+.sub {
+  font-size: .8125rem;
+  color: var(--text4);
+  margin-top: .3rem;
+}
+
+/* ── Stats ────────────────────────────────────────────────────────────────── */
+.statsBar {
+  display: flex;
+  gap: .75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.statPill {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4375rem .875rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: .8rem;
+  color: var(--text3);
+}
+.statDot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.statNum {
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -.02em;
+}
+
+/* ── List ─────────────────────────────────────────────────────────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .875rem 0;
+  border-bottom: 1px solid var(--border);
+  transition: opacity .15s;
+}
+.row:last-child { border-bottom: none; }
+.rowInactive { opacity: .45; }
+
+.rowLeft {
+  display: flex;
+  align-items: center;
+  gap: .875rem;
+  min-width: 0;
+}
+.typeBadge {
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  padding: .25rem .5rem;
+  border-radius: var(--radius-xs);
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+}
+.rowInfo {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  min-width: 0;
+}
+.rowName {
+  font-size: .8125rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rowMeta {
+  font-size: .75rem;
+  color: var(--text4);
+}
+
+.rowRight {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-shrink: 0;
+}
+
+/* ── Toggle switch ────────────────────────────────────────────────────────── */
+.toggleBtn {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--surface4);
+  border: 1px solid var(--border2);
+  cursor: pointer;
+  position: relative;
+  transition: background .2s, border-color .2s;
+  flex-shrink: 0;
+}
+.toggleBtn.toggleActive {
+  background: var(--success);
+  border-color: var(--success);
+}
+.toggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .2s cubic-bezier(.16,1,.3,1);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.toggleActive .toggleKnob {
+  transform: translateX(16px);
+}
+
+/* ── Delete button ────────────────────────────────────────────────────────── */
+.deleteBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text4);
+  padding: .3rem;
+  border-radius: var(--radius-xs);
+  display: flex;
+  transition: color .15s, background .15s;
+}
+.deleteBtn:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+/* ── Empty ────────────────────────────────────────────────────────────────── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .875rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--text4);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+/* ── Skeletons ────────────────────────────────────────────────────────────── */
+.skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
+
+/* ── Form ─────────────────────────────────────────────────────────────────── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: .875rem;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .header { flex-direction: column; align-items: flex-start; }
+  .rowLeft { flex-direction: column; align-items: flex-start; gap: .375rem; }
+}
