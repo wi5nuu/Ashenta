@@ -317,7 +317,7 @@ class CameraWorker:
                 frame_count = 0
                 # Process detection every N frames to maintain smooth stream FPS.
                 # Crossing logic is unaffected — guards require multiple frames anyway.
-                detect_every = 2  # run YOLO on every 2nd frame
+                detect_every = 1  # run YOLO every frame for stable tracking
 
                 while not self._stop_event.is_set():
                     ok, frame = cap.read()
